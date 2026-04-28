@@ -88,16 +88,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
             if (lotDetails != null && !isLoading) ...[
               _buildDetailCard("Informations Article", [
-                _detailRow("Nom", lotDetails!.itemName),
-                _detailRow("Code", lotDetails!.itemCode),
-                _detailRow("Lot (DistNumber)", lotDetails!.distNumber),
+                _detailRow("Nom Article", lotDetails!.itemName),
+                _detailRow("Code Article", lotDetails!.itemCode),
+                _detailRow("Lot", lotDetails!.distNumber),
               ]),
               const SizedBox(height: 15),
               _buildDetailCard("Détails Techniques", [
                 _detailRow("Quantité", lotDetails!.qteCarton ?? "0"),
                 _detailRow("MnfSerial", lotDetails!.mnfSerial ?? "---"),
-                _detailRow("Date Prod", lotDetails!.inDate ?? "---"),
-                _detailRow("Date Exp", lotDetails!.expDate ?? "---"),
+                _detailRow("Date Production", lotDetails!.inDate ?? "---"),
+                _detailRow("Date Expiration", lotDetails!.expDate ?? "---"),
+                _detailRow("Sys Number", lotDetails!.sysNumber ?? "---"),
               ]),
             ]
           ],

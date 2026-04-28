@@ -6,6 +6,7 @@ class LotInfo {
   final String? inDate;
   final String? mnfSerial;
   final String? expDate;
+  final String sysNumber;
 
   LotInfo({
     required this.itemCode,
@@ -15,17 +16,19 @@ class LotInfo {
     this.inDate,
     this.mnfSerial,
     this.expDate,
+    required this.sysNumber,
   });
 
   factory LotInfo.fromJson(Map<String, dynamic> json) {
     return LotInfo(
       itemCode: json['ItemCode'] ?? 'N/A',
-      itemName: json['ItemDescription'] ?? 'Inconnu', // Changé ItemName -> ItemDescription
-      distNumber: json['Batch'] ?? 'N/A',            // Changé DistNumber -> Batch
+      itemName: json['ItemDescription'] ?? 'Inconnu',
+      distNumber: json['Batch'] ?? 'N/A',
       qteCarton: json['U_U_QteCarton']?.toString() ?? '0',
-      inDate: json['AdmissionDate'] != null ? json['AdmissionDate'].split('T')[0] : '---', // Changé InDate -> AdmissionDate
-      mnfSerial: json['BatchAttribute1'] ?? '---',   // On utilise souvent Attribute1 pour le MnfSerial
-      expDate: json['ExpirationDate'] != null ? json['ExpirationDate'].split('T')[0] : '---', // Changé ExpDate -> ExpirationDate
+      inDate: json['AdmissionDate'] != null ? json['AdmissionDate'].split('T')[0] : '---',
+      mnfSerial: json['BatchAttribute1'] ?? '---',
+      expDate: json['ExpirationDate'] != null ? json['ExpirationDate'].split('T')[0] : '---',
+      sysNumber: json['SystemNumber']?.toString() ?? '0',
     );
   }
 }
