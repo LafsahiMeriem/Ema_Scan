@@ -9,43 +9,38 @@ class ScannerScreen extends StatefulWidget {
 }
 
 class _ScannerScreenState extends State<ScannerScreen> {
-  // On place le contrôleur ici pour pouvoir l'arrêter proprement
   final MobileScannerController controller = MobileScannerController(
-    detectionSpeed: DetectionSpeed.noDuplicates, // Évite de scanner 10 fois le même code
+    detectionSpeed: DetectionSpeed.noDuplicates,
     formats: [BarcodeFormat.all],
   );
 
-  bool hasScanned = false; // Sécurité pour ne faire le "pop" qu'une seule fois
+  bool hasScanned = false;
 
   @override
   void dispose() {
-    controller.dispose(); // Très important pour libérer la caméra
+    controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Scanner le Code-Barre'),
-        backgroundColor: const Color(0xFF0056D2),
-      ),
+      appBar: AppBar(title: const Text('Scanner un Code-Barre')),
       body: MobileScanner(
         controller: controller,
         onDetect: (capture) {
-          if (hasScanned) return; // Si on a déjà scanné, on ignore la suite
+          if (hasScanned) return;
 
           final List<Barcode> barcodes = capture.barcodes;
           if (barcodes.isNotEmpty) {
-            hasScanned = true; // On verrouille
-            final String code = barcodes.first.rawValue ?? "---";
+            hasScanned = true;
+            // On récupère la vraie valeur scannée
+            final String codeScanne = barcodes.first.rawValue ?? "";
 
-            debugPrint('✅ Code trouvé : $code');
-
-            // On arrête la caméra avant de partir
             controller.stop().then((_) {
               if (mounted) {
-                Navigator.pop(context, code); // Retour à l'accueil avec le code
+                // On renvoie la VRAIE valeur à l'écran précédent
+                Navigator.pop(context, codeScanne);
               }
             });
           }

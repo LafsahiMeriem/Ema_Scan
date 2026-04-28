@@ -1,9 +1,9 @@
 import 'dart:convert';
-import 'dart:io'; // Nécessaire pour le bypass SSL
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../models/lot_info.dart';
 
-// Cette classe permet d'accepter les certificats auto-signés de SAP en local
+// --- CETTE CLASSE DOIT RESTER ICI POUR LE BYPASS SSL ---
 class MyHttpOverrides extends HttpOverrides {
   @override
   HttpClient createHttpClient(SecurityContext? context) {
@@ -13,7 +13,8 @@ class MyHttpOverrides extends HttpOverrides {
 }
 
 class SapService {
-  final String baseUrl = "https://EMA.bpsMaroc.com:50000/b1s/v1";  String? sessionId;
+  final String baseUrl = "https://EMA.bpsMaroc.com:50000/b1s/v1";
+  String? sessionId;
 
   // 1. Connexion à SAP (Login)
   Future<bool> login() async {
@@ -43,36 +44,66 @@ class SapService {
     }
   }
 
-  // 2. Récupération des données du Lot
+  // 2. Récupération des données complètes du Lot
   Future<LotInfo?> fetchLotData(String scanCode) async {
-    // Si on n'a pas de session, on se connecte d'abord
-    if (sessionId == null) {
-      bool connected = await login();
-      if (!connected) return null;
-    }
+    if (sessionId == null) await login();
 
     try {
-      // On interroge les détails des numéros de lots (OIBT / OBTN)
+      final String cleanCode = scanCode.trim();
+
+      // On utilise 'Batch' pour le filtre
+      final String url = "$baseUrl/BatchNumberDetails?\$filter=Batch eq '$cleanCode'";
+
+      print("🔍 Envoi de la requête finale avec 'Batch'...");
+
       final response = await http.get(
-        Uri.parse("$baseUrl/BatchNumberDetails?\$filter=BatchNumber eq '$scanCode'"),
+        Uri.parse(url),
         headers: {
           "Cookie": "B1SESSION=$sessionId",
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['value'] != null && data['value'].isNotEmpty) {
+          print("✅ LOT TROUVÉ !");
           return LotInfo.fromJson(data['value'][0]);
         } else {
-          print("⚠️ Aucun lot trouvé pour le code : $scanCode");
+          print("⚠️ Le lot '$cleanCode' n'existe pas dans la table Batch (OBTN).");
+        }
+      } else {
+        print("❌ Erreur SAP : ${response.body}");
+      }
+    } catch (e) {
+      print("❌ Erreur critique : $e");
+    }
+    return null;
+  }
+
+  Future<LotInfo?> _fetchViaItemsSerial(String code) async {
+    final String url = "$baseUrl/Items?\$filter=ItemSerialNumberCollection/any(s: s/InternalSerialNumber eq '$code')";
+    print("🔍 Recherche via ItemSerialNumberCollection...");
+    final response = await http.get(Uri.parse(url), headers: {"Cookie": "B1SESSION=$sessionId"});
+    // ... logique similaire ...
+    return null;
+  }
+
+
+
+// Petite fonction d'aide pour trouver le nom exact du champ dans OSRN
+  Future<LotInfo?> _searchManualSerial(String code) async {
+    final String url = "$baseUrl/SerialNumberDetails?\$top=20";
+    final response = await http.get(Uri.parse(url), headers: {"Cookie": "B1SESSION=$sessionId"});
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      for (var item in data['value']) {
+        // On teste les noms de champs probables pour OSRN
+        if (item['SerialNumber'] == code || item['InternalSerialNumber'] == code || item['SystemSerialNumber'] == code) {
+          return LotInfo.fromJson(item);
         }
       }
-      return null;
-    } catch (e) {
-      print("❌ Erreur lors de la récupération : $e");
-      return null;
     }
+    return null;
   }
 }

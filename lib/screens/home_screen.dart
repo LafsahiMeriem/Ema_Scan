@@ -1,7 +1,9 @@
+import 'package:ema_lot_scanner/models/lot_info.dart';
 import 'package:flutter/material.dart';
-import 'scanner_screen.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../services/sap_service.dart';
-import '../models/lot_info.dart';
+import 'scanner_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -11,125 +13,124 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  final TextEditingController _lotController = TextEditingController();
   final SapService _sapService = SapService();
-  LotInfo? _lotData;
-  bool _isLoading = false;
+  LotInfo? lotDetails; // On stocke l'objet complet ici
+  bool isLoading = false;
 
-  void _scanAndFetch() async {
-    // 1. Ouvre le scanner et attend le résultat
-    final code = await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const ScannerScreen()),
-    );
-
-    // 2. Si un code est bien récupéré, on l'affiche tout de suite
-    if (code != null) {
-      if (!mounted) return;
-
-      setState(() {
-        _isLoading = false;
-        _lotData = LotInfo(
-          itemCode: "SCAN_DIRECT",        // Label pour indiquer le mode
-          itemName: "Code détecté",       // Label pour indiquer le mode
-          batchNum: code,                 // C'est ici qu'on affiche la valeur scannée !
-        );
-      });
-    }
-  }  // --- LES FONCTIONS DOIVENT ÊTRE ICI, AVANT LE BUILD ---
-
-  void _showErrorSnackBar(String message) {
+  // À ajouter dans la classe _HomeScreenState
+  void _showError(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: Colors.redAccent,
+        backgroundColor: Colors.red[800],
+        behavior: SnackBarBehavior.floating,
       ),
     );
   }
+
+  Future<void> _recupererData() async {
+    String lot = _lotController.text.trim();
+    if (lot.isEmpty) return;
+
+    setState(() => isLoading = true);
+
+    // On utilise la méthode de notre service
+    final data = await _sapService.fetchLotData(lot);
+
+    setState(() {
+      lotDetails = data;
+      isLoading = false;
+    });
+
+    if (data == null) {
+      _showError("Lot introuvable ou erreur de connexion.");
+    }
+  }
+
+  // ... (Garder _showError)
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('EMA Scan Lot'),
-        centerTitle: true,
-        backgroundColor: const Color(0xFF0056D2),
-        foregroundColor: Colors.white,
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
+      appBar: AppBar(title: const Text('EMA Data Recovery'), backgroundColor: Colors.blue[900]),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20.0),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Expanded(
-              child: Center(
-                child: _isLoading
-                    ? const CircularProgressIndicator()
-                    : _lotData != null
-                    ? _buildResultCard()
-                    : _buildPlaceholder(),
+            TextField(
+              controller: _lotController,
+              decoration: InputDecoration(
+                labelText: "Lot scanné",
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.qr_code_scanner),
+                  onPressed: () async {
+                    final result = await Navigator.push(
+                      context, MaterialPageRoute(builder: (_) => const ScannerScreen()),
+                    );
+                    if (result != null) setState(() => _lotController.text = result);
+                  },
+                ),
               ),
             ),
             const SizedBox(height: 20),
             ElevatedButton.icon(
-              onPressed: _scanAndFetch,
-              icon: const Icon(Icons.qr_code_scanner, size: 30),
-              label: const Text("SCANNER UN LOT",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size(double.infinity, 65),
-                backgroundColor: const Color(0xFF0056D2),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(15)),
-              ),
+              icon: const Icon(Icons.download),
+              label: const Text("RÉCUPÉRER DATA"),
+              onPressed: isLoading ? null : _recupererData,
+              style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
             ),
+            const SizedBox(height: 25),
+
+            if (isLoading) const CircularProgressIndicator(),
+
+            if (lotDetails != null && !isLoading) ...[
+              _buildDetailCard("Informations Article", [
+                _detailRow("Nom", lotDetails!.itemName),
+                _detailRow("Code", lotDetails!.itemCode),
+                _detailRow("Lot (DistNumber)", lotDetails!.distNumber),
+              ]),
+              const SizedBox(height: 15),
+              _buildDetailCard("Détails Techniques", [
+                _detailRow("Quantité", lotDetails!.qteCarton ?? "0"),
+                _detailRow("MnfSerial", lotDetails!.mnfSerial ?? "---"),
+                _detailRow("Date Prod", lotDetails!.inDate ?? "---"),
+                _detailRow("Date Exp", lotDetails!.expDate ?? "---"),
+              ]),
+            ]
           ],
         ),
       ),
     );
   }
 
-  Widget _buildResultCard() {
+  Widget _buildDetailCard(String title, List<Widget> children) {
     return Card(
-      elevation: 8,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      elevation: 3,
       child: Padding(
-        padding: const EdgeInsets.all(20.0),
+        padding: const EdgeInsets.all(15.0),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Icon(Icons.inventory_2, color: Color(0xFF0056D2), size: 50),
-            const Divider(height: 30),
-            _infoRow("Numéro de Lot", _lotData!.batchNum),
-            _infoRow("Code Article", _lotData!.itemCode),
-            _infoRow("Désignation", _lotData!.itemName),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.blue)),
+            const Divider(),
+            ...children
           ],
         ),
       ),
     );
   }
 
-  Widget _buildPlaceholder() {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.barcode_reader, size: 100, color: Colors.grey.shade300),
-        const SizedBox(height: 20),
-        const Text("En attente de scan...",
-            style: TextStyle(color: Colors.grey, fontSize: 16)),
-      ],
-    );
-  }
-
-  Widget _infoRow(String label, String value) {
+  Widget _detailRow(String label, String value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(color: Colors.grey, fontSize: 12)),
-          Text(value,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
+          Text(value, style: const TextStyle(color: Colors.black87)),
         ],
       ),
     );
