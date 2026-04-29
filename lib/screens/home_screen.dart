@@ -54,7 +54,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('EMA Data Recovery'), backgroundColor: Colors.blue[900]),
+      appBar: AppBar(title: const Text('EMA ChocoScan'), backgroundColor: Colors.blue[900]),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20.0),
         child: Column(
