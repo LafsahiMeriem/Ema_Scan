@@ -24,8 +24,8 @@ class SapService {
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
           "CompanyDB": "test_Web",
-          "UserName": "bps1",
-          "Password": "1234"
+          "UserName": "manager",
+          "Password": "20@Y0ur20"
         }),
       );
 
@@ -46,35 +46,52 @@ class SapService {
 
   // 2. Récupération dynamique de TOUS les magasins (Warehouses)
   // Cette méthode permet de gérer des centaines de magasins sans les coder en dur
+// 2. Récupération dynamique de TOUS les magasins (Warehouses)
+// Dans sap_service.dart
+
   Future<List<Map<String, String>>> fetchAllWarehouses() async {
     if (sessionId == null) await login();
 
     try {
-      // On récupère uniquement le code et le nom des magasins actifs
+      // Construction de l'URL avec des paramètres explicites
+      final uri = Uri.parse('$baseUrl/Warehouses').replace(queryParameters: {
+        '\$select': 'WarehouseCode,WarehouseName',
+        '\$filter': 'Inactive eq \'tNO\'',
+        '\$top': '100', // On force 100 ici
+      });
+
+      print("🌐 Appel URL : $uri");
+
       final response = await http.get(
-        Uri.parse('$baseUrl/Warehouses?\$select=WarehouseCode,WarehouseName&\$filter=Inactive eq \'tNO\''),
-        headers: {"Cookie": "B1SESSION=$sessionId"},
+        uri,
+        headers: {
+          "Cookie": "B1SESSION=$sessionId",
+          "Content-Type": "application/json",
+        },
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         List<Map<String, String>> whsList = [];
 
-        for (var item in data['value']) {
-          whsList.add({
-            'code': item['WarehouseCode'].toString(),
-            'name': item['WarehouseName'].toString(),
-          });
+        if (data['value'] != null) {
+          for (var item in data['value']) {
+            whsList.add({
+              'code': item['WarehouseCode'].toString(),
+              'name': item['WarehouseName'].toString(),
+            });
+          }
         }
-        print("✅ ${whsList.length} magasins récupérés.");
+        print("✅ ${whsList.length} magasins récupérés réellement.");
         return whsList;
+      } else {
+        print("❌ Erreur SAP Warehouses: ${response.body}");
       }
     } catch (e) {
       print("❌ Erreur de chargement des magasins : $e");
     }
     return [];
   }
-
   // 3. Récupération des données du Lot via BatchNumberDetails
   Future<LotInfo?> fetchLotData(String scanCode) async {
     if (sessionId == null) await login();
@@ -97,6 +114,7 @@ class SapService {
         final data = jsonDecode(response.body);
         if (data['value'] != null && data['value'].isNotEmpty) {
           print("✅ Lot trouvé !");
+          print("DEBUG DATA: ${data['value'][0]}");
           return LotInfo.fromJson(data['value'][0]);
         } else {
           print("⚠️ Le lot '$cleanCode' n'existe pas.");
@@ -111,7 +129,6 @@ class SapService {
   }
 
   // 4. Création du transfert de stock (StockTransfer)
-  // Cette méthode envoie l'ordre final à SAP Business One
 // Dans services/sap_service.dart
 
   Future<String?> createStockTransfer({
@@ -123,50 +140,60 @@ class SapService {
   }) async {
     if (sessionId == null) await login();
 
-    // Étape de liaison automatique (Optionnelle mais conseillée)
+    // Nettoyage radical du numéro de lot pour éviter les erreurs de caractères
+    final String cleanBatch = batchNumber.trim();
+
     await lierArticleAuMagasin(itemCode, toWhs);
 
     try {
+      final Map<String, dynamic> body = {
+        "DocDate": DateTime.now().toIso8601String().split('T')[0],
+        "FromWarehouse": fromWhs,
+        "ToWarehouse": toWhs,
+        "StockTransferLines": [
+          {
+            "ItemCode": itemCode,
+            "Quantity": quantity,
+            "FromWarehouseCode": fromWhs,
+            "WarehouseCode": toWhs,
+            "BatchNumbers": [
+              {
+                "BatchNumber": cleanBatch, // Utilisation du lot nettoyé
+                "Quantity": quantity,
+                // "BaseLineNumber": 0 // Optionnel, SAP le gère souvent seul
+              }
+            ]
+          }
+        ]
+      };
+
+      print("🚀 Tentative de transfert : $itemCode | Lot: $cleanBatch | Qte: $quantity");
+
       final response = await http.post(
         Uri.parse('$baseUrl/StockTransfers'),
         headers: {
           "Cookie": "B1SESSION=$sessionId",
           "Content-Type": "application/json",
         },
-        body: jsonEncode({
-          "DocDate": DateTime.now().toIso8601String().split('T')[0],
-          "FromWarehouse": fromWhs,
-          "ToWarehouse": toWhs,
-          "StockTransferLines": [
-            {
-              "ItemCode": itemCode,
-              "Quantity": quantity,
-              "WarehouseCode": toWhs,
-              "BatchNumbers": [
-                {
-                  "BatchNumber": batchNumber,
-                  "Quantity": quantity,
-                }
-              ]
-            }
-          ]
-        }),
+        body: jsonEncode(body),
       );
 
       if (response.statusCode == 201 || response.statusCode == 200) {
-        return null; // Succès
+        return null;
       } else {
-        // ON EXTRAIT LE MESSAGE D'ERREUR DE SAP
         final errorData = jsonDecode(response.body);
-        String sapErrorMessage = errorData['error']['message']['value'] ?? "Erreur inconnue SAP";
-        print("❌ Erreur SAP : $sapErrorMessage");
-        return sapErrorMessage;
+        String msg = errorData['error']['message']['value'] ?? "Erreur inconnue";
+
+        // Aide au diagnostic si l'erreur persiste
+        if (msg.contains("-5002")) {
+          return "Le lot [$cleanBatch] n'est pas disponible dans le magasin $fromWhs (Erreur 131-183).";
+        }
+        return msg;
       }
     } catch (e) {
       return "Erreur réseau : $e";
     }
   }
-
   // --- Méthodes de secours (Optionnelles) ---
 
   Future<LotInfo?> _fetchViaItemsSerial(String code) async {
