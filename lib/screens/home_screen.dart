@@ -1,4 +1,6 @@
+import 'package:ema_lot_scanner/screens/setting_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/lot_info.dart';
 import '../services/sap_service.dart';
 import 'scanner_screen.dart';
@@ -16,7 +18,7 @@ class _HomeScreenState extends State<HomeScreen> {
   LotInfo? lotDetails;
   bool isLoading = false;
 
-  // Liste globale des magasins récupérée depuis SAP
+  // Liste globale pour la recherche manuelle si besoin
   List<Map<String, String>> allWarehouses = [];
 
   @override
@@ -25,11 +27,85 @@ class _HomeScreenState extends State<HomeScreen> {
     _chargerMagasins();
   }
 
-  // Charge les centaines de magasins une seule fois au démarrage
   Future<void> _chargerMagasins() async {
     final list = await _sapService.fetchAllWarehouses();
     if (mounted) {
       setState(() => allWarehouses = list);
+    }
+  }
+
+  // --- LOGIQUE DE LOGIN POUR LA CONFIG ---
+  void _showLoginDialog() {
+    final TextEditingController userCtrl = TextEditingController();
+    final TextEditingController passCtrl = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Accès Configuration"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: userCtrl, decoration: const InputDecoration(labelText: "Utilisateur")),
+            TextField(controller: passCtrl, decoration: const InputDecoration(labelText: "Mot de passe"), obscureText: true),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Annuler")),
+          ElevatedButton(
+            onPressed: () {
+              // Login forcé dans le code
+              if (userCtrl.text == "admin" && passCtrl.text == "1234") {
+                Navigator.pop(context);
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
+              } else {
+                _showError("Identifiants incorrects");
+              }
+            },
+            child: const Text("Valider"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- FONCTION DE TRANSFERT COMPLETE ---
+  Future<void> _executerTransfert(String destinationWhs) async {
+    if (lotDetails == null) return;
+
+    setState(() => isLoading = true);
+
+    try {
+      // 1. Récupérer le magasin SOURCE depuis la configuration sauvegardée
+      final prefs = await SharedPreferences.getInstance();
+      String sourceWhs = prefs.getString('whsSource') ?? "ZPF-BC"; // "ZPF-BC" par défaut si vide
+
+      // 2. Calculer la quantité totale (QteCarton * NumInCnt)
+      double quantiteTotale = lotDetails!.totalQuantity;
+
+      // 3. Envoyer à SAP
+      String? errorMessage = await _sapService.createStockTransfer(
+        itemCode: lotDetails!.itemCode,
+        batchNumber: lotDetails!.distNumber,
+        fromWhs: sourceWhs,
+        toWhs: destinationWhs,
+        quantity: quantiteTotale,
+      );
+
+      setState(() => isLoading = false);
+
+      if (errorMessage == null) {
+        _showSuccess("Transfert de $quantiteTotale unités réussi ! ($sourceWhs -> $destinationWhs)");
+        setState(() {
+          lotDetails = null;
+          _lotController.clear();
+        });
+      } else {
+        _showError("Erreur SAP : $errorMessage");
+      }
+    } catch (e) {
+      setState(() => isLoading = false);
+      _showError("Erreur locale : $e");
     }
   }
 
@@ -50,23 +126,17 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _recupererData() async {
     String lot = _lotController.text.trim();
     if (lot.isEmpty) return;
-
     setState(() => isLoading = true);
     final data = await _sapService.fetchLotData(lot);
-
     setState(() {
       lotDetails = data;
       isLoading = false;
     });
-
-    if (data == null) _showError("Lot introuvable ou erreur SAP.");
+    if (data == null) _showError("Lot introuvable dans SAP.");
   }
 
-  // Ouvre l'interface de recherche pour choisir le magasin
   Future<void> _selectionnerEtTransferer() async {
-    if (allWarehouses.isEmpty) {
-      await _chargerMagasins();
-    }
+    if (allWarehouses.isEmpty) await _chargerMagasins();
 
     final selectedWhsCode = await showSearch<String>(
       context: context,
@@ -78,33 +148,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-// Dans screens/home_screen.dart
-
-  Future<void> _executerTransfert(String destinationWhs) async {
-    setState(() => isLoading = true);
-
-    // On récupère le résultat (soit null, soit le message d'erreur)
-    String? errorMessage = await _sapService.createStockTransfer(
-      itemCode: lotDetails!.itemCode,
-      batchNumber: lotDetails!.distNumber,
-      fromWhs: "ZPF-BC",
-      toWhs: destinationWhs,
-      quantity: 1.0,
-    );
-
-    setState(() => isLoading = false);
-
-    if (errorMessage == null) {
-      _showSuccess("Transfert réussi vers $destinationWhs");
-      setState(() {
-        lotDetails = null;
-        _lotController.clear();
-      });
-    } else {
-      // ON AFFICHE LE VRAI PROBLÈME SAP ICI
-      _showError("Erreur SAP : $errorMessage");
-    }
-  }
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -112,6 +155,26 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('EMA ChocoScan'),
         backgroundColor: Colors.blue[900],
         foregroundColor: Colors.white,
+      ),
+      // --- MENU TIRETS (DRAWER) ---
+      drawer: Drawer(
+        child: ListView(
+          padding: EdgeInsets.zero,
+          children: [
+            DrawerHeader(
+              decoration: BoxDecoration(color: Colors.blue[900]),
+              child: const Text("PARAMÈTRES", style: TextStyle(color: Colors.white, fontSize: 20)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.settings),
+              title: const Text("Configuration Magasins"),
+              onTap: () {
+                Navigator.pop(context); // Ferme le menu
+                _showLoginDialog();
+              },
+            ),
+          ],
+        ),
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20.0),
@@ -154,13 +217,14 @@ class _HomeScreenState extends State<HomeScreen> {
             if (lotDetails != null && !isLoading) ...[
               _buildDetailCard("Informations Article", [
                 _detailRow("Article", lotDetails!.itemName),
-                _detailRow("Code", lotDetails!.itemCode),
                 _detailRow("Lot", lotDetails!.distNumber),
-                _detailRow("Quantité", lotDetails!.qteCarton ?? "0"),
+                _detailRow("Code Article", lotDetails!.itemCode),
+                const Divider(),
+                _detailRow("Qte Carton", "${lotDetails!.qteCarton}"),
+                _detailRow("Unités/Carton", "${lotDetails!.numInCnt}"),
+                _detailRow("TOTAL UNITÉS", "${lotDetails!.totalQuantity}", isBold: true),
               ]),
               const SizedBox(height: 25),
-
-              // BOUTON UNIQUE DE TRANSFERT AVEC RECHERCHE
               ElevatedButton.icon(
                 icon: const Icon(Icons.send_rounded),
                 label: const Text("CHOISIR DESTINATION & TRANSFÉRER"),
@@ -183,50 +247,38 @@ class _HomeScreenState extends State<HomeScreen> {
     return Card(
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(15.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.blue)),
-            const Divider(),
-            ...children
-          ],
-        ),
-      ),
+      child: Padding(padding: const EdgeInsets.all(15.0), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.blue)),
+        const Divider(),
+        ...children
+      ])),
     );
   }
 
-  Widget _detailRow(String label, String value) {
+  Widget _detailRow(String label, String value, {bool isBold = false}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6.0),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w500, color: Colors.black54)),
-          Flexible(child: Text(value, style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.right)),
+          Text(label, style: TextStyle(fontWeight: isBold ? FontWeight.bold : FontWeight.w500, color: isBold ? Colors.blue[900] : Colors.black54)),
+          Flexible(child: Text(value, style: TextStyle(fontWeight: FontWeight.bold, fontSize: isBold ? 16 : 14, color: isBold ? Colors.blue[900] : Colors.black), textAlign: TextAlign.right)),
         ],
       ),
     );
   }
 }
 
-// LOGIQUE DE RECHERCHE DYNAMIQUE (Pour des centaines de magasins)
+// Delegate pour la recherche des magasins
 class WarehouseSearchDelegate extends SearchDelegate<String> {
   final List<Map<String, String>> warehouses;
-
   WarehouseSearchDelegate(this.warehouses);
 
   @override
-  List<Widget>? buildActions(BuildContext context) => [
-    IconButton(icon: const Icon(Icons.clear), onPressed: () => query = '')
-  ];
+  List<Widget>? buildActions(BuildContext context) => [IconButton(icon: const Icon(Icons.clear), onPressed: () => query = '')];
 
   @override
-  Widget? buildLeading(BuildContext context) => IconButton(
-    icon: const Icon(Icons.arrow_back),
-    onPressed: () => close(context, ''),
-  );
+  Widget? buildLeading(BuildContext context) => IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => close(context, ''));
 
   @override
   Widget buildResults(BuildContext context) => _buildList();
@@ -237,20 +289,17 @@ class WarehouseSearchDelegate extends SearchDelegate<String> {
   Widget _buildList() {
     final suggestions = warehouses.where((whs) {
       final input = query.toLowerCase();
-      return whs['name']!.toLowerCase().contains(input) ||
-          whs['code']!.toLowerCase().contains(input);
+      return whs['name']!.toLowerCase().contains(input) || whs['code']!.toLowerCase().contains(input);
     }).toList();
 
     return ListView.builder(
       itemCount: suggestions.length,
-      itemBuilder: (context, index) {
-        return ListTile(
-          leading: const Icon(Icons.storefront),
-          title: Text(suggestions[index]['name']!),
-          subtitle: Text("Code: ${suggestions[index]['code']}"),
-          onTap: () => close(context, suggestions[index]['code']!),
-        );
-      },
+      itemBuilder: (context, index) => ListTile(
+        leading: const Icon(Icons.storefront),
+        title: Text(suggestions[index]['name']!),
+        subtitle: Text("Code: ${suggestions[index]['code']}"),
+        onTap: () => close(context, suggestions[index]['code']!),
+      ),
     );
   }
 }

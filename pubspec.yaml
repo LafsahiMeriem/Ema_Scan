@@ -10,6 +10,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  shared_preferences: ^2.2.2
 
   # CORRECTION : Ces lignes doivent être alignées avec "flutter:"
   cupertino_icons: ^1.0.8
