@@ -44,51 +44,47 @@ class SapService {
     }
   }
 
-  // 2. Récupération dynamique de TOUS les magasins (Warehouses)
-  // Cette méthode permet de gérer des centaines de magasins sans les coder en dur
-// 2. Récupération dynamique de TOUS les magasins (Warehouses)
-// Dans sap_service.dart
+
 
   Future<List<Map<String, String>>> fetchAllWarehouses() async {
     if (sessionId == null) await login();
 
     try {
-      // Construction de l'URL avec des paramètres explicites
-      final uri = Uri.parse('$baseUrl/Warehouses').replace(queryParameters: {
-        '\$select': 'WarehouseCode,WarehouseName',
-        '\$filter': 'Inactive eq \'tNO\'',
-        '\$top': '100', // On force 100 ici
-      });
-
-      print("🌐 Appel URL : $uri");
+      // Ajout de $top=100 pour dépasser la limite par défaut de 20
+      final String url = "$baseUrl/Warehouses?\$select=WarehouseCode,WarehouseName&\$top=100";
 
       final response = await http.get(
-        uri,
+        Uri.parse(url),
         headers: {
           "Cookie": "B1SESSION=$sessionId",
           "Content-Type": "application/json",
+          // Optionnel : demander explicitement de ne pas paginer (si supporté par votre config)
+          "Prefer": "odata.maxpagesize=100",
         },
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        List<Map<String, String>> whsList = [];
+        final List<dynamic>? values = data['value'];
 
-        if (data['value'] != null) {
-          for (var item in data['value']) {
-            whsList.add({
-              'code': item['WarehouseCode'].toString(),
-              'name': item['WarehouseName'].toString(),
-            });
-          }
-        }
-        print("✅ ${whsList.length} magasins récupérés réellement.");
+        if (values == null) return [];
+
+        List<Map<String, String>> whsList = values.map((item) {
+          return {
+            'code': item['WarehouseCode']?.toString() ?? '',
+            'name': item['WarehouseName']?.toString() ?? '',
+          };
+        }).toList();
+
+        // Tri alphabétique
+        whsList.sort((a, b) => a['code']!.compareTo(b['code']!));
+
         return whsList;
       } else {
-        print("❌ Erreur SAP Warehouses: ${response.body}");
+        print("❌ Erreur SAP (${response.statusCode}): ${response.body}");
       }
     } catch (e) {
-      print("❌ Erreur de chargement des magasins : $e");
+      print("❌ Exception lors du chargement : $e");
     }
     return [];
   }

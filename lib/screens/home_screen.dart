@@ -214,7 +214,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ElevatedButton(
                 onPressed: () {
                   // Changement du mot de passe ici
-                  if(u.text == "admin" && p.text == "Bp5@maroc") {
+                  if(u.text.trim() == "admin" && p.text.trim() == "Bp5@maroc") {
                     Navigator.pop(context);
                     Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
                   } else {
