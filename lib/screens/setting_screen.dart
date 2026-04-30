@@ -1,4 +1,4 @@
-import 'dart:convert'; // Important pour JSON
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/sap_service.dart';
@@ -12,8 +12,6 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final SapService _sapService = SapService();
-
-  // Cette liste sera maintenant chargée depuis le téléphone
   List<Map<String, String>> allWarehouses = [];
 
   String? whsSource;
@@ -27,20 +25,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _loadAllData();
   }
 
-  // 1. Charger tout au démarrage (Magasins + Choix sélectionnés)
+  // Charge les magasins et les sélections précédentes au démarrage
   Future<void> _loadAllData() async {
     final prefs = await SharedPreferences.getInstance();
-
-    // Charger la liste des magasins sauvegardée
     String? savedWhsJson = prefs.getString('all_warehouses_list');
 
     setState(() {
-      // Charger les 3 choix
       whsSource = prefs.getString('whsSource');
       whsQuarantaine = prefs.getString('whsQuarantaine');
       whsLiberer = prefs.getString('whsLiberer');
 
-      // Si on a une liste sauvegardée, on la décode
       if (savedWhsJson != null) {
         List<dynamic> decoded = jsonDecode(savedWhsJson);
         allWarehouses = decoded.map((item) => Map<String, String>.from(item)).toList();
@@ -48,32 +42,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
-  // 2. Récupérer depuis SAP ET Sauvegarder la liste entière
   Future<void> _getDataFromSap() async {
     setState(() => isLoading = true);
-
     final list = await _sapService.fetchAllWarehouses();
 
     if (list.isNotEmpty) {
       final prefs = await SharedPreferences.getInstance();
-      // On transforme la liste en texte JSON pour la stocker
-      String encodedList = jsonEncode(list);
-      await prefs.setString('all_warehouses_list', encodedList);
-
+      await prefs.setString('all_warehouses_list', jsonEncode(list));
       setState(() {
         allWarehouses = list;
         isLoading = false;
       });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Liste des magasins mise à jour !"))
-      );
     } else {
       setState(() => isLoading = false);
     }
   }
 
-  // Sauvegarder un choix (Source, Quarantaine ou Libéré)
   Future<void> _saveSelection(String key, String value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(key, value);
@@ -85,6 +69,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       appBar: AppBar(
         title: const Text("Configuration Magasins"),
         backgroundColor: Colors.blue[900],
+        foregroundColor: Colors.white,
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -102,26 +87,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
               setState(() => whsLiberer = val);
               _saveSelection('whsLiberer', val!);
             }),
-
             const Spacer(),
-
             if (isLoading) const CircularProgressIndicator(),
-
-            const Text(
-              "Note: Appuyez sur GET DATA seulement si vous avez ajouté de nouveaux magasins dans SAP.",
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: Colors.grey),
-            ),
             const SizedBox(height: 10),
-
             ElevatedButton.icon(
               onPressed: isLoading ? null : _getDataFromSap,
               icon: const Icon(Icons.sync),
               label: const Text("GET DATA (MAJ DEPUIS SAP)"),
               style: ElevatedButton.styleFrom(
-                minimumSize: const Size(double.infinity, 50),
+                minimumSize: const Size(double.infinity, 55),
                 backgroundColor: Colors.blue[800],
                 foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               ),
             ),
           ],
@@ -131,22 +108,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildWhsDropdown(String label, String? currentVal, Function(String?) onChange) {
-    // Vérifier si la valeur actuelle existe toujours dans la liste
+    // Vérification si la valeur existe dans la liste actuelle
     bool valueExists = allWarehouses.any((w) => w['code'] == currentVal);
 
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 10),
+      padding: const EdgeInsets.symmetric(vertical: 12),
       child: DropdownButtonFormField<String>(
+        isExpanded: true, // RÉPARE L'OVERFLOW : permet au contenu de prendre toute la largeur
         value: valueExists ? currentVal : null,
         decoration: InputDecoration(
           labelText: label,
-          border: const OutlineInputBorder(),
+          labelStyle: TextStyle(color: Colors.blue[900], fontWeight: FontWeight.bold),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
           filled: true,
-          fillColor: Colors.grey[100],
+          fillColor: Colors.blue.withOpacity(0.05),
         ),
+        // Style du texte sélectionné pour éviter l'overflow
+        selectedItemBuilder: (BuildContext context) {
+          return allWarehouses.map<Widget>((Map<String, String> item) {
+            return Text(
+              "${item['code']} - ${item['name']}",
+              overflow: TextOverflow.ellipsis, // Coupe le texte avec "..." s'il est trop long
+              maxLines: 1,
+            );
+          }).toList();
+        },
         items: allWarehouses.map((w) => DropdownMenuItem(
           value: w['code'],
-          child: Text("${w['code']} - ${w['name']}"),
+          child: Text(
+            "${w['code']} - ${w['name']}",
+            style: const TextStyle(fontSize: 13), // Texte un peu plus petit pour le menu
+          ),
         )).toList(),
         onChanged: onChange,
         hint: Text(currentVal ?? "Sélectionner un magasin"),
