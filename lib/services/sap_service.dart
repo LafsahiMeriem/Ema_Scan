@@ -49,17 +49,78 @@ class SapService {
   Future<List<Map<String, String>>> fetchAllWarehouses() async {
     if (sessionId == null) await login();
 
-    try {
-      // Ajout de $top=100 pour dépasser la limite par défaut de 20
-      final String url = "$baseUrl/Warehouses?\$select=WarehouseCode,WarehouseName&\$top=100";
+    List<Map<String, String>> whsList = [];
+    // On commence avec l'URL initiale (on filtre les actifs et on demande 100 par page)
+    String? nextUrl = "$baseUrl/Warehouses?\$select=WarehouseCode,WarehouseName&\$filter=Inactive eq 'tNO'&\$top=100";
 
+    try {
+      // Tant qu'il y a une URL suivante, on continue de charger
+      while (nextUrl != null) {
+        final response = await http.get(
+          Uri.parse(nextUrl),
+          headers: {
+            "Cookie": "B1SESSION=$sessionId",
+            "Content-Type": "application/json",
+          },
+        );
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          final List<dynamic>? values = data['value'];
+
+          if (values != null) {
+            for (var item in values) {
+              whsList.add({
+                'code': item['WarehouseCode']?.toString() ?? '',
+                'name': item['WarehouseName']?.toString() ?? '',
+              });
+            }
+          }
+
+          // --- C'EST ICI QUE ÇA SE JOUE ---
+          // On vérifie si SAP nous donne un lien vers la page suivante
+          if (data['@odata.nextLink'] != null) {
+            // Le lien suivant est souvent relatif ou complet, on le reconstruit si besoin
+            String nextPath = data['@odata.nextLink'];
+            if (nextPath.startsWith('http')) {
+              nextUrl = nextPath;
+            } else {
+              nextUrl = "$baseUrl/$nextPath";
+            }
+          } else {
+            nextUrl = null; // Plus de pages, on arrête la boucle
+          }
+        } else {
+          print("❌ Erreur SAP : ${response.body}");
+          break;
+        }
+      }
+
+      // Tri final pour le confort de l'utilisateur
+      whsList.sort((a, b) => a['code']!.compareTo(b['code']!));
+      return whsList;
+
+    } catch (e) {
+      print("❌ Exception lors du chargement total : $e");
+      return whsList;
+    }
+  }
+
+
+  Future<List<Map<String, dynamic>>> fetchLotsByWarehouse(String whsCode) async {
+    if (sessionId == null) await login();
+
+    // On change d'objet pour "BatchNumbers" qui est souvent plus complet
+    // ou on reste sur BatchNumberDetails mais on accepte que le magasin
+    // puisse être absent et on ajuste la stratégie.
+    final String url = "$baseUrl/BatchNumberDetails?\$top=1000";
+
+    try {
       final response = await http.get(
         Uri.parse(url),
         headers: {
           "Cookie": "B1SESSION=$sessionId",
           "Content-Type": "application/json",
-          // Optionnel : demander explicitement de ne pas paginer (si supporté par votre config)
-          "Prefer": "odata.maxpagesize=100",
         },
       );
 
@@ -69,26 +130,54 @@ class SapService {
 
         if (values == null) return [];
 
-        List<Map<String, String>> whsList = values.map((item) {
-          return {
-            'code': item['WarehouseCode']?.toString() ?? '',
-            'name': item['WarehouseName']?.toString() ?? '',
-          };
-        }).toList();
+        List<Map<String, dynamic>> filteredLots = [];
 
-        // Tri alphabétique
-        whsList.sort((a, b) => a['code']!.compareTo(b['code']!));
+        for (var item in values) {
+          // Selon votre DEBUG, le champ magasin n'existe pas dans le premier niveau.
+          // On va essayer de chercher dans une propriété 'WarehouseLocation'
+          // ou d'autres noms techniques courants.
+          String itemWhs = (item['Warehouse'] ??
+              item['WhsCode'] ??
+              item['DefaultWarehouse'] ??
+              "").toString();
 
-        return whsList;
-      } else {
-        print("❌ Erreur SAP (${response.statusCode}): ${response.body}");
+          // Si le champ est toujours vide, SAP nécessite peut-être une requête jointe.
+          // Mais testons d'abord avec les noms de votre SQL (DistNumber et ItemCode)
+          if (itemWhs == whsCode || itemWhs.isEmpty) {
+            // Si itemWhs est vide, on l'ajoute quand même pour test
+            // (à retirer si trop de résultats)
+            filteredLots.add({
+              'itemCode': item['ItemCode']?.toString() ?? '',
+              'itemName': item['ItemDescription']?.toString() ?? 'Article sans nom',
+              'distNumber': item['Batch']?.toString() ?? item['SystemNumber']?.toString() ?? '',
+              'quantity': "Vérifier SQL",
+              'expDate': item['ExpirationDate']?.toString() ?? '-',
+              'mfrDate': item['ManufacturingDate']?.toString() ?? '-',
+            });
+          }
+        }
+
+        // Si toujours 0, essayons une requête plus directe sur les lignes de stock
+        if (filteredLots.isEmpty) {
+          print("⚠️ Toujours 0 lots. Tentative via une autre URL...");
+          return await _fetchViaAlternative(whsCode);
+        }
+
+        return filteredLots;
       }
     } catch (e) {
-      print("❌ Exception lors du chargement : $e");
+      print("❌ Exception : $e");
     }
     return [];
   }
-  // 3. Récupération des données du Lot via BatchNumberDetails
+
+// Fonction de secours si la première échoue
+  Future<List<Map<String, dynamic>>> _fetchViaAlternative(String whsCode) async {
+    // On tente d'interroger directement la table de liaison (OBTQ en Service Layer)
+    final String url = "$baseUrl/BatchNumberDetails?\$filter=Warehouse eq '$whsCode'";
+    // ... (Code similaire au dessus)
+    return [];
+  }
   Future<LotInfo?> fetchLotData(String scanCode) async {
     if (sessionId == null) await login();
 

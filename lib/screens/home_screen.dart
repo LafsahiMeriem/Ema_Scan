@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/lot_info.dart';
 import '../services/sap_service.dart';
 import 'scanner_screen.dart';
 import 'setting_screen.dart';
+import 'warehouse_list_screen.dart'; // Importation nécessaire pour le suivi
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -18,12 +20,10 @@ class _HomeScreenState extends State<HomeScreen> {
   LotInfo? lotDetails;
   bool isLoading = false;
 
-  // Palette de couleurs Pro
-  final Color primaryColor = const Color(0xFF0D47A1); // Bleu SAP
+  final Color primaryColor = const Color(0xFF0D47A1);
   final Color backgroundColor = const Color(0xFFF4F7F9);
-  final Color accentColor = const Color(0xFF1976D2);
 
-  // --- LOGIQUE (CONCERT CONSERVÉ) ---
+  // --- LOGIQUE DE TRANSFERT ---
   Future<void> _executerTransfert(String type) async {
     if (lotDetails == null) return;
     setState(() => isLoading = true);
@@ -69,7 +69,6 @@ class _HomeScreenState extends State<HomeScreen> {
     if (data == null) _showError("Lot introuvable.");
   }
 
-  // --- UI DESIGN ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -106,6 +105,63 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // --- DRAWER MODIFIÉ (SUIVI AJOUTÉ ICI) ---
+  Widget _buildDrawer() {
+    return Drawer(
+      child: Column(
+        children: [
+          UserAccountsDrawerHeader(
+            decoration: BoxDecoration(color: primaryColor),
+            accountName: const Text("Utilisateur EMA", style: TextStyle(fontWeight: FontWeight.bold)),
+            accountEmail: const Text("Version 1.2.0"),
+            currentAccountPicture: const CircleAvatar(backgroundColor: Colors.white, child: Icon(Icons.person, size: 40)),
+          ),
+
+          // Option 1 : Paramètres (avec dialogue d'admin)
+          ListTile(
+            leading: const Icon(Icons.settings),
+            title: const Text("Paramètres Magasins"),
+            onTap: () {
+              Navigator.pop(context);
+              _showLoginDialog();
+            },
+          ),
+
+          // Option 2 : SUIVI MAGASIN (Positionné ici selon votre demande)
+          ListTile(
+            leading: const Icon(Icons.list_alt, color: Colors.blue),
+            title: const Text("Suivi Magasin"),
+            onTap: () async {
+              Navigator.pop(context); // Ferme le menu
+
+              // On récupère la liste des magasins stockée localement
+              final prefs = await SharedPreferences.getInstance();
+              String? savedWhsJson = prefs.getString('all_warehouses_list');
+              List<Map<String, String>> warehouses = [];
+
+              if (savedWhsJson != null) {
+                List<dynamic> decoded = jsonDecode(savedWhsJson);
+                warehouses = decoded.map((item) => Map<String, String>.from(item)).toList();
+              }
+
+              // Navigation vers l'interface de liste
+              if (mounted) {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => WarehouseListScreen(warehouses: warehouses))
+                );
+              }
+            },
+          ),
+
+          const Spacer(),
+          const Padding(padding: EdgeInsets.all(16), child: Text("© 2026 EMA ChocoScan", style: TextStyle(color: Colors.grey, fontSize: 12))),
+        ],
+      ),
+    );
+  }
+
+  // Les autres méthodes (_buildSearchHeader, _buildMainInfoCard, etc.) restent identiques à votre code original...
   Widget _buildSearchHeader() {
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 25),
@@ -268,29 +324,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildDrawer() {
-    return Drawer(
-      child: Column(
-        children: [
-          UserAccountsDrawerHeader(
-            decoration: BoxDecoration(color: primaryColor),
-            accountName: const Text("Utilisateur EMA", style: TextStyle(fontWeight: FontWeight.bold)),
-            accountEmail: const Text("Version 1.2.0"),
-            currentAccountPicture: const CircleAvatar(backgroundColor: Colors.white, child: Icon(Icons.person, size: 40)),
-          ),
-          ListTile(
-            leading: const Icon(Icons.settings),
-            title: const Text("Paramètres Magasins"),
-            onTap: () { Navigator.pop(context); _showLoginDialog(); },
-          ),
-          const Spacer(),
-          const Padding(padding: EdgeInsets.all(16), child: Text("© 2026 EMA ChocoScan", style: TextStyle(color: Colors.grey, fontSize: 12))),
-        ],
-      ),
-    );
-  }
-
-  // --- DIALOGS (CONCEPT CONSERVÉ) ---
   void _showLoginDialog() {
     final u = TextEditingController();
     final p = TextEditingController();
