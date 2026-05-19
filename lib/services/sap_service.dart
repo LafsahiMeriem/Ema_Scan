@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../models/lot_info.dart';
 
-// --- CETTE CLASSE DOIT RESTER ICI POUR LE BYPASS SSL ---
+// Bypass SSL pour les certificats auto-signés
 class MyHttpOverrides extends HttpOverrides {
   @override
   HttpClient createHttpClient(SecurityContext? context) {
@@ -16,7 +16,7 @@ class SapService {
   final String baseUrl = "https://EMA.bpsMaroc.com:50000/b1s/v1";
   String? sessionId;
 
-  // 1. Connexion à SAP (Login)
+  // 1. Connexion à SAP
   Future<bool> login() async {
     try {
       final response = await http.post(
@@ -39,183 +39,167 @@ class SapService {
         return false;
       }
     } catch (e) {
-      print("❌ Erreur réseau : $e");
+      print("❌ Erreur réseau Login : $e");
       return false;
     }
   }
 
-
-
+  // 2. Récupérer tous les magasins (avec pagination)
   Future<List<Map<String, String>>> fetchAllWarehouses() async {
     if (sessionId == null) await login();
 
     List<Map<String, String>> whsList = [];
-    // On commence avec l'URL initiale (on filtre les actifs et on demande 100 par page)
-    String? nextUrl = "$baseUrl/Warehouses?\$select=WarehouseCode,WarehouseName&\$filter=Inactive eq 'tNO'&\$top=100";
+
+    // On demande le top 100
+    String? nextUrl = "$baseUrl/Warehouses?\$select=WarehouseCode,WarehouseName&\$top=100";
 
     try {
-      // Tant qu'il y a une URL suivante, on continue de charger
       while (nextUrl != null) {
         final response = await http.get(
           Uri.parse(nextUrl),
           headers: {
             "Cookie": "B1SESSION=$sessionId",
             "Content-Type": "application/json",
+            "B1S-PageSize": "500", // 👈 FORCE SAP à accepter des pages de 100 lignes
           },
         );
 
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          final List<dynamic>? values = data['value'];
-
-          if (values != null) {
-            for (var item in values) {
-              whsList.add({
-                'code': item['WarehouseCode']?.toString() ?? '',
-                'name': item['WarehouseName']?.toString() ?? '',
-              });
-            }
-          }
-
-          // --- C'EST ICI QUE ÇA SE JOUE ---
-          // On vérifie si SAP nous donne un lien vers la page suivante
-          if (data['@odata.nextLink'] != null) {
-            // Le lien suivant est souvent relatif ou complet, on le reconstruit si besoin
-            String nextPath = data['@odata.nextLink'];
-            if (nextPath.startsWith('http')) {
-              nextUrl = nextPath;
-            } else {
-              nextUrl = "$baseUrl/$nextPath";
-            }
-          } else {
-            nextUrl = null; // Plus de pages, on arrête la boucle
-          }
-        } else {
-          print("❌ Erreur SAP : ${response.body}");
+        if (response.statusCode != 200) {
+          print("Erreur API: ${response.statusCode} - ${response.body}");
           break;
+        }
+
+        final data = jsonDecode(response.body);
+        final List<dynamic> values = data['value'] ?? [];
+
+        for (var item in values) {
+          whsList.add({
+            'code': item['WarehouseCode']?.toString() ?? '',
+            'name': item['WarehouseName']?.toString() ?? '',
+          });
+        }
+
+        // Gestion de la pagination si jamais vous dépassez 100 un jour
+        if (data['@odata.nextLink'] != null) {
+          String nextPath = data['@odata.nextLink'];
+
+          // Nettoyage au cas où le chemin commence par un slash
+          if (nextPath.startsWith('/')) {
+            nextPath = nextPath.substring(1);
+          }
+
+          nextUrl = nextPath.startsWith('http')
+              ? nextPath
+              : "$baseUrl/$nextPath";
+        } else {
+          nextUrl = null;
         }
       }
 
-      // Tri final pour le confort de l'utilisateur
+      // Tri alphabétique par code
       whsList.sort((a, b) => a['code']!.compareTo(b['code']!));
       return whsList;
 
     } catch (e) {
-      print("❌ Exception lors du chargement total : $e");
+      print("Error fetching warehouses: $e");
       return whsList;
     }
   }
+  Future<List<Map<String, dynamic>>> fetchAllLotsGlobal() async {
 
-
-  Future<List<Map<String, dynamic>>> fetchLotsByWarehouse(String whsCode) async {
     if (sessionId == null) await login();
-
-    // On change d'objet pour "BatchNumbers" qui est souvent plus complet
-    // ou on reste sur BatchNumberDetails mais on accepte que le magasin
-    // puisse être absent et on ajuste la stratégie.
-    final String url = "$baseUrl/BatchNumberDetails?\$top=1000";
+    List<Map<String, dynamic>> allLots = [];
+    String? nextUrl = "$baseUrl/BatchNumberDetails?\$top=500";
 
     try {
-      final response = await http.get(
-        Uri.parse(url),
-        headers: {
-          "Cookie": "B1SESSION=$sessionId",
-          "Content-Type": "application/json",
-        },
-      );
+      while (nextUrl != null) {
+        final response = await http.get(
+          Uri.parse(nextUrl),
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final List<dynamic>? values = data['value'];
-
-        if (values == null) return [];
-
-        List<Map<String, dynamic>> filteredLots = [];
-
-        for (var item in values) {
-          // Selon votre DEBUG, le champ magasin n'existe pas dans le premier niveau.
-          // On va essayer de chercher dans une propriété 'WarehouseLocation'
-          // ou d'autres noms techniques courants.
-          String itemWhs = (item['Warehouse'] ??
-              item['WhsCode'] ??
-              item['DefaultWarehouse'] ??
-              "").toString();
-
-          // Si le champ est toujours vide, SAP nécessite peut-être une requête jointe.
-          // Mais testons d'abord avec les noms de votre SQL (DistNumber et ItemCode)
-          if (itemWhs == whsCode || itemWhs.isEmpty) {
-            // Si itemWhs est vide, on l'ajoute quand même pour test
-            // (à retirer si trop de résultats)
-            filteredLots.add({
-              'itemCode': item['ItemCode']?.toString() ?? '',
-              'itemName': item['ItemDescription']?.toString() ?? 'Article sans nom',
-              'distNumber': item['Batch']?.toString() ?? item['SystemNumber']?.toString() ?? '',
-              'quantity': "Vérifier SQL",
-              'expDate': item['ExpirationDate']?.toString() ?? '-',
-              'mfrDate': item['ManufacturingDate']?.toString() ?? '-',
-            });
+          headers: {
+            "Cookie": "B1SESSION=$sessionId",
+            "Content-Type": "application/json",
+            "Prefer": "odata.maxpagesize=500",
+          },
+        );
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          final List<dynamic> values = data['value'] ?? [];
+          if (values.isNotEmpty) {
+// REGARDEZ BIEN CETTE LIGNE DANS VOTRE CONSOLE
+            print("NOMS DES COLONNES SAP REÇUES : ${values[0].keys.toList()}");
           }
+          final currentPageLots = values.map((item) {
+
+// On tente de lire la quantité avec TOUTES les variantes possibles
+
+            var rawQty = item['Quantity'] ?? item['TotalInStock'] ?? item['InStock'] ?? item['Available'] ?? '0';
+            return {
+              'itemCode': item['ItemCode']?.toString() ?? '',
+              'itemName': item['ItemDescription']?.toString() ?? 'Sans nom',
+              'distNumber': (item['Batch'] ?? item['BatchNumber'] ?? item['DistNumber'] ?? 'N/A').toString(),
+              'warehouse': (item['WhsCode'] ?? item['WarehouseCode'] ?? item['Warehouse'] ?? 'N/A').toString(),
+              'quantity': (item['Quantity'] ?? item['quantity'] ?? rawQty ?? 0).toString(),
+              'expDate': item['ExpirationDate']?.toString()?.split('T')[0] ?? '-',
+              'mfrDate': item['ManufacturingDate']?.toString()?.split('T')[0] ?? '-',
+
+            };
+
+          }).toList();
+          allLots.addAll(currentPageLots);
+
+          if (data['@odata.nextLink'] != null) {
+            String nextPath = data['@odata.nextLink'];
+            nextUrl = nextPath.startsWith('http') ? nextPath : "$baseUrl/$nextPath";
+          } else {
+            nextUrl = null;
+          }
+
+        } else {
+          break;
         }
 
-        // Si toujours 0, essayons une requête plus directe sur les lignes de stock
-        if (filteredLots.isEmpty) {
-          print("⚠️ Toujours 0 lots. Tentative via une autre URL...");
-          return await _fetchViaAlternative(whsCode);
-        }
-
-        return filteredLots;
       }
+
+// --- TEST TEMPORAIRE : On retire le filtre pour forcer l'affichage ---
+      print("Affichage de ${allLots.length} lots sans filtrage.");
+      return allLots;
     } catch (e) {
-      print("❌ Exception : $e");
+      print("❌ Erreur : $e");
+      return [];
     }
-    return [];
   }
 
-// Fonction de secours si la première échoue
-  Future<List<Map<String, dynamic>>> _fetchViaAlternative(String whsCode) async {
-    // On tente d'interroger directement la table de liaison (OBTQ en Service Layer)
-    final String url = "$baseUrl/BatchNumberDetails?\$filter=Warehouse eq '$whsCode'";
-    // ... (Code similaire au dessus)
-    return [];
+
+  // 4. Récupérer les lots par magasin (Filtre la liste globale)
+  Future<List<Map<String, dynamic>>> fetchLotsByWarehouse(String whsCode) async {
+    final allLots = await fetchAllLotsGlobal();
+    return allLots.where((lot) => lot['warehouse'] == whsCode).toList();
   }
+
+  // 5. Recherche d'un lot spécifique (Scan)
   Future<LotInfo?> fetchLotData(String scanCode) async {
     if (sessionId == null) await login();
-
     try {
-      final String cleanCode = scanCode.trim();
-      final String url = "$baseUrl/BatchNumberDetails?\$filter=Batch eq '$cleanCode'";
-
-      print("🔍 Recherche du lot : $cleanCode");
-
+      final String url = "$baseUrl/BatchNumberDetails?\$filter=Batch eq '${scanCode.trim()}'";
       final response = await http.get(
         Uri.parse(url),
-        headers: {
-          "Cookie": "B1SESSION=$sessionId",
-          "Content-Type": "application/json",
-        },
+        headers: {"Cookie": "B1SESSION=$sessionId", "Content-Type": "application/json"},
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['value'] != null && data['value'].isNotEmpty) {
-          print("✅ Lot trouvé !");
-          print("DEBUG DATA: ${data['value'][0]}");
           return LotInfo.fromJson(data['value'][0]);
-        } else {
-          print("⚠️ Le lot '$cleanCode' n'existe pas.");
         }
-      } else {
-        print("❌ Erreur SAP : ${response.body}");
       }
     } catch (e) {
-      print("❌ Erreur critique fetchLotData : $e");
+      print("❌ Erreur fetchLotData : $e");
     }
     return null;
   }
 
-  // 4. Création du transfert de stock (StockTransfer)
-// Dans services/sap_service.dart
-
+  // 6. Création du transfert de stock
   Future<String?> createStockTransfer({
     required String itemCode,
     required String batchNumber,
@@ -224,10 +208,6 @@ class SapService {
     required double quantity,
   }) async {
     if (sessionId == null) await login();
-
-    // Nettoyage radical du numéro de lot pour éviter les erreurs de caractères
-    final String cleanBatch = batchNumber.trim();
-
     await lierArticleAuMagasin(itemCode, toWhs);
 
     try {
@@ -239,100 +219,43 @@ class SapService {
           {
             "ItemCode": itemCode,
             "Quantity": quantity,
-            "FromWarehouseCode": fromWhs,
             "WarehouseCode": toWhs,
             "BatchNumbers": [
-              {
-                "BatchNumber": cleanBatch, // Utilisation du lot nettoyé
-                "Quantity": quantity,
-                // "BaseLineNumber": 0 // Optionnel, SAP le gère souvent seul
-              }
+              {"BatchNumber": batchNumber.trim(), "Quantity": quantity}
             ]
           }
         ]
       };
 
-      print("🚀 Tentative de transfert : $itemCode | Lot: $cleanBatch | Qte: $quantity");
-
       final response = await http.post(
         Uri.parse('$baseUrl/StockTransfers'),
-        headers: {
-          "Cookie": "B1SESSION=$sessionId",
-          "Content-Type": "application/json",
-        },
+        headers: {"Cookie": "B1SESSION=$sessionId", "Content-Type": "application/json"},
         body: jsonEncode(body),
       );
 
-      if (response.statusCode == 201 || response.statusCode == 200) {
-        return null;
-      } else {
-        final errorData = jsonDecode(response.body);
-        String msg = errorData['error']['message']['value'] ?? "Erreur inconnue";
+      if (response.statusCode == 201 || response.statusCode == 200) return null;
 
-        // Aide au diagnostic si l'erreur persiste
-        if (msg.contains("-5002")) {
-          return "Le lot [$cleanBatch] n'est pas disponible dans le magasin $fromWhs (Erreur 131-183).";
-        }
-        return msg;
-      }
+      final errorData = jsonDecode(response.body);
+      return errorData['error']['message']['value'] ?? "Erreur inconnue";
     } catch (e) {
       return "Erreur réseau : $e";
     }
   }
-  // --- Méthodes de secours (Optionnelles) ---
 
-  Future<LotInfo?> _fetchViaItemsSerial(String code) async {
-    final String url = "$baseUrl/Items?\$filter=ItemSerialNumberCollection/any(s: s/InternalSerialNumber eq '$code')";
-    final response = await http.get(Uri.parse(url), headers: {"Cookie": "B1SESSION=$sessionId"});
-    return null;
-  }
-
-
+  // 7. Lier l'article au magasin de destination (Obligatoire SAP)
   Future<bool> lierArticleAuMagasin(String itemCode, String toWhs) async {
     if (sessionId == null) await login();
-
     try {
-      // On met à jour l'objet Items via un PATCH
       final response = await http.patch(
         Uri.parse('$baseUrl/Items(\'$itemCode\')'),
-        headers: {
-          "Cookie": "B1SESSION=$sessionId",
-          "Content-Type": "application/json",
-        },
+        headers: {"Cookie": "B1SESSION=$sessionId", "Content-Type": "application/json"},
         body: jsonEncode({
-          "ItemWarehouseInfoCollection": [
-            {
-              "WarehouseCode": toWhs
-            }
-          ]
+          "ItemWarehouseInfoCollection": [{"WarehouseCode": toWhs}]
         }),
       );
-
-      // SAP retourne 204 No Content en cas de succès pour un PATCH
-      if (response.statusCode == 204 || response.statusCode == 200) {
-        print("✅ Article $itemCode lié au magasin $toWhs");
-        return true;
-      } else {
-        print("❌ Erreur liaison article : ${response.body}");
-        return false;
-      }
+      return response.statusCode == 204 || response.statusCode == 200;
     } catch (e) {
       return false;
     }
-  }
-
-
-  Future<LotInfo?> _searchManualSerial(String code) async {
-    final String url = "$baseUrl/SerialNumberDetails?\$top=20";
-    final response = await http.get(Uri.parse(url), headers: {"Cookie": "B1SESSION=$sessionId"});
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      for (var item in data['value']) {
-        if (item['SerialNumber'] == code || item['InternalSerialNumber'] == code || item['SystemSerialNumber'] == code) {
-          return LotInfo.fromJson(item);
-        }
-      }
-    }
-    return null;
   }
 }

@@ -5,7 +5,6 @@ import '../models/lot_info.dart';
 import '../services/sap_service.dart';
 import 'scanner_screen.dart';
 import 'setting_screen.dart';
-import 'warehouse_list_screen.dart'; // Importation nécessaire pour le suivi
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -20,10 +19,11 @@ class _HomeScreenState extends State<HomeScreen> {
   LotInfo? lotDetails;
   bool isLoading = false;
 
-  final Color primaryColor = const Color(0xFF0D47A1);
-  final Color backgroundColor = const Color(0xFFF4F7F9);
+  // Palette Premium (Slate & Indigo Deep)
+  final Color primaryDark = const Color(0xFF0F172A);
+  final Color accentIndigo = const Color(0xFF6366F1);
+  final Color surfaceLight = const Color(0xFFF8FAFC);
 
-  // --- LOGIQUE DE TRANSFERT ---
   Future<void> _executerTransfert(String type) async {
     if (lotDetails == null) return;
     setState(() => isLoading = true);
@@ -35,7 +35,7 @@ class _HomeScreenState extends State<HomeScreen> {
           : prefs.getString('whsLiberer');
 
       if (sourceWhs == null || targetWhs == null) {
-        _showError("Magasins non configurés");
+        _showStatusSnackBar("Configuration manquante : Magasins non définis.", isError: true);
         setState(() => isLoading = false);
         return;
       }
@@ -50,14 +50,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
       setState(() => isLoading = false);
       if (error == null) {
-        _showSuccess("Transfert réussi vers $targetWhs");
+        _showStatusSnackBar("Transfert complété avec succès vers $targetWhs");
         setState(() { lotDetails = null; _lotController.clear(); });
       } else {
-        _showError("SAP : $error");
+        _showStatusSnackBar("Erreur SAP : $error", isError: true);
       }
     } catch (e) {
       setState(() => isLoading = false);
-      _showError("Erreur : $e");
+      _showStatusSnackBar("Exception système : $e", isError: true);
     }
   }
 
@@ -66,38 +66,30 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => isLoading = true);
     final data = await _sapService.fetchLotData(_lotController.text);
     setState(() { lotDetails = data; isLoading = false; });
-    if (data == null) _showError("Lot introuvable.");
+    if (data == null) _showStatusSnackBar("Aucun lot correspondant trouvé.", isError: true);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: backgroundColor,
+      backgroundColor: surfaceLight,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: const Text('EMA ChocoScan', style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: primaryColor,
         elevation: 0,
+        backgroundColor: Colors.transparent,
+        title: const Text('EMA CHOCOSCAN',
+            style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 2, fontSize: 16, color: Colors.white)),
         centerTitle: true,
+        iconTheme: const IconThemeData(color: Colors.white),
       ),
       drawer: _buildDrawer(),
       body: Column(
         children: [
-          _buildSearchHeader(),
+          _buildPremiumHeader(),
           Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  if (isLoading)
-                    Padding(padding: const EdgeInsets.only(top: 40), child: CircularProgressIndicator(color: primaryColor)),
-                  if (lotDetails != null && !isLoading) ...[
-                    _buildMainInfoCard(),
-                    const SizedBox(height: 20),
-                    _buildActionButtons(),
-                  ] else if (!isLoading)
-                    _buildEmptyState(),
-                ],
-              ),
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 400),
+              child: _buildContent(),
             ),
           ),
         ],
@@ -105,91 +97,79 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // --- DRAWER MODIFIÉ (SUIVI AJOUTÉ ICI) ---
-  Widget _buildDrawer() {
-    return Drawer(
-      child: Column(
-        children: [
-          UserAccountsDrawerHeader(
-            decoration: BoxDecoration(color: primaryColor),
-            accountName: const Text("Utilisateur EMA", style: TextStyle(fontWeight: FontWeight.bold)),
-            accountEmail: const Text("Version 1.2.0"),
-            currentAccountPicture: const CircleAvatar(backgroundColor: Colors.white, child: Icon(Icons.person, size: 40)),
-          ),
-
-          // Option 1 : Paramètres (avec dialogue d'admin)
-          ListTile(
-            leading: const Icon(Icons.settings),
-            title: const Text("Paramètres Magasins"),
-            onTap: () {
-              Navigator.pop(context);
-              _showLoginDialog();
-            },
-          ),
-
-          // Option 2 : SUIVI MAGASIN (Positionné ici selon votre demande)
-          ListTile(
-            leading: const Icon(Icons.list_alt, color: Colors.blue),
-            title: const Text("Suivi Magasin"),
-            onTap: () async {
-              Navigator.pop(context); // Ferme le menu
-
-              // On récupère la liste des magasins stockée localement
-              final prefs = await SharedPreferences.getInstance();
-              String? savedWhsJson = prefs.getString('all_warehouses_list');
-              List<Map<String, String>> warehouses = [];
-
-              if (savedWhsJson != null) {
-                List<dynamic> decoded = jsonDecode(savedWhsJson);
-                warehouses = decoded.map((item) => Map<String, String>.from(item)).toList();
-              }
-
-              // Navigation vers l'interface de liste
-              if (mounted) {
-                Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => WarehouseListScreen(warehouses: warehouses))
-                );
-              }
-            },
-          ),
-
-          const Spacer(),
-          const Padding(padding: EdgeInsets.all(16), child: Text("© 2026 EMA ChocoScan", style: TextStyle(color: Colors.grey, fontSize: 12))),
-        ],
-      ),
-    );
-  }
-
-  // Les autres méthodes (_buildSearchHeader, _buildMainInfoCard, etc.) restent identiques à votre code original...
-  Widget _buildSearchHeader() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 25),
-      decoration: BoxDecoration(
-        color: primaryColor,
-        borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(25), bottomRight: Radius.circular(25)),
-      ),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 8, offset: Offset(0, 4))],
+  Widget _buildContent() {
+    if (isLoading) {
+      return Center(child: CircularProgressIndicator(color: accentIndigo, strokeWidth: 2));
+    }
+    if (lotDetails != null) {
+      return SingleChildScrollView(
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 25),
+        child: Column(
+          children: [
+            _buildMainInfoCard(),
+            const SizedBox(height: 30),
+            _buildActionButtons(),
+          ],
         ),
-        child: TextField(
-          controller: _lotController,
-          onSubmitted: (_) => _fetchData(),
-          decoration: InputDecoration(
-            hintText: "Scanner ou entrer un lot...",
-            prefixIcon: Icon(Icons.search, color: primaryColor),
-            border: InputBorder.none,
-            contentPadding: const EdgeInsets.symmetric(vertical: 15),
-            suffixIcon: IconButton(
-              icon: Icon(Icons.qr_code_scanner, color: primaryColor),
-              onPressed: () async {
-                final res = await Navigator.push(context, MaterialPageRoute(builder: (_) => const ScannerScreen()));
-                if (res != null) { _lotController.text = res; _fetchData(); }
-              },
+      );
+    }
+    return _buildEmptyState();
+  }
+
+  Widget _buildPremiumHeader() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(20, 100, 20, 40),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [primaryDark, const Color(0xFF1E293B)],
+        ),
+        borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(50)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text("Gestion des Flux", style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w500)),
+          const SizedBox(height: 8),
+          const Text("Identification Lot", style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 25),
+          _buildSearchBox(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchBox() {
+    return Container(
+      height: 60,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withOpacity(0.2)),
+      ),
+      child: TextField(
+        controller: _lotController,
+        onSubmitted: (_) => _fetchData(),
+        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+        decoration: InputDecoration(
+          hintText: "Saisir ou scanner un lot...",
+          hintStyle: TextStyle(color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.normal),
+          prefixIcon: const Icon(Icons.search_rounded, color: Colors.white70),
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(vertical: 20),
+          suffixIcon: IconButton(
+            icon: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(color: accentIndigo, borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.qr_code_scanner_rounded, color: Colors.white, size: 20),
             ),
+            onPressed: () async {
+              final res = await Navigator.push(context, MaterialPageRoute(builder: (_) => const ScannerScreen()));
+              if (res != null) { _lotController.text = res; _fetchData(); }
+            },
           ),
         ),
       ),
@@ -197,52 +177,32 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildMainInfoCard() {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(30),
+        boxShadow: [BoxShadow(color: primaryDark.withOpacity(0.05), blurRadius: 30, offset: const Offset(0, 10))],
+      ),
       child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: primaryColor.withOpacity(0.05),
-              borderRadius: const BorderRadius.only(topLeft: Radius.circular(16), topRight: Radius.circular(16)),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.inventory_2, color: primaryColor),
-                const SizedBox(width: 10),
-                Expanded(child: Text(lotDetails!.itemName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16))),
-              ],
-            ),
-          ),
+          _buildCardHeader(),
           Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(24),
             child: Column(
               children: [
-                _infoRow(Icons.label_outline, "Code Article", lotDetails!.itemCode),
-                _infoRow(Icons.tag, "Numero de palette / Lot", lotDetails!.distNumber),
-                _infoRow(Icons.inventory, "Quantité (Cartons)", "${lotDetails!.qteCarton}"),
-                const Divider(height: 30),
+                _infoTile(Icons.api_rounded, "REFERENCE ARTICLE", lotDetails!.itemCode),
+                _infoTile(Icons.layers_rounded, "IDENTIFIANT LOT", lotDetails!.distNumber),
+                _infoTile(Icons.inventory_2_outlined, "CONDITIONNEMENT", "${lotDetails!.qteCarton} Cartons"),
+                const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Divider(color: Color(0xFFF1F5F9))),
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    _dateItem("Date Production", lotDetails!.mfrDate ?? "-"),
-                    _dateItem("Date Expiration", lotDetails!.expDate ?? "-"),
+                    _dateBlock("FABRICATION", lotDetails!.mfrDate ?? "--/--/--"),
+                    _dateBlock("EXPIRATION", lotDetails!.expDate ?? "--/--/--"),
                   ],
                 ),
-                const Divider(height: 30),
-                Container(
-                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 20),
-                  decoration: BoxDecoration(color: primaryColor.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text("TOTAL UNITÉS", style: TextStyle(fontWeight: FontWeight.bold)),
-                      Text("${lotDetails!.totalQuantity}", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: primaryColor)),
-                    ],
-                  ),
-                ),
+                const SizedBox(height: 25),
+                _buildQuantityDisplay(),
               ],
             ),
           ),
@@ -251,27 +211,79 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _infoRow(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+  Widget _buildCardHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+      decoration: BoxDecoration(
+        color: accentIndigo.withOpacity(0.08),
+        borderRadius: const BorderRadius.only(topLeft: Radius.circular(30), topRight: Radius.circular(30)),
+      ),
       child: Row(
         children: [
-          Icon(icon, size: 18, color: Colors.grey),
-          const SizedBox(width: 10),
-          Text(label, style: const TextStyle(color: Colors.grey)),
-          const Spacer(),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+          CircleAvatar(backgroundColor: accentIndigo, radius: 18, child: const Icon(Icons.shopping_bag_rounded, size: 18, color: Colors.white)),
+          const SizedBox(width: 12),
+          Expanded(child: Text(lotDetails!.itemName.toUpperCase(),
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13, color: primaryDark, letterSpacing: 0.5))),
         ],
       ),
     );
   }
 
-  Widget _dateItem(String label, String date) {
+  Widget _buildQuantityDisplay() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: primaryDark,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [BoxShadow(color: accentIndigo.withOpacity(0.2), blurRadius: 15, offset: const Offset(0, 5))],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text("DISPONIBILITÉ RÉELLE", style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1)),
+              Text("Unités totales", style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500)),
+            ],
+          ),
+          Text("${lotDetails!.totalQuantity}",
+              style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -1)),
+        ],
+      ),
+    );
+  }
+
+  Widget _infoTile(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: accentIndigo.withOpacity(0.5)),
+          const SizedBox(width: 15),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: TextStyle(color: Colors.grey[400], fontWeight: FontWeight.w800, fontSize: 9, letterSpacing: 1)),
+              Text(value, style: TextStyle(fontWeight: FontWeight.bold, color: primaryDark, fontSize: 15)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _dateBlock(String label, String date) {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+        Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[400], fontWeight: FontWeight.w900)),
         const SizedBox(height: 4),
-        Text(date, style: const TextStyle(fontWeight: FontWeight.bold)),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(color: surfaceLight, borderRadius: BorderRadius.circular(8)),
+          child: Text(date, style: TextStyle(fontWeight: FontWeight.bold, color: primaryDark, fontSize: 13)),
+        ),
       ],
     );
   }
@@ -280,48 +292,110 @@ class _HomeScreenState extends State<HomeScreen> {
     bool canTransfer = lotDetails != null && lotDetails!.totalQuantity > 0;
     return Row(
       children: [
-        Expanded(
-          child: ElevatedButton.icon(
-            icon: const Icon(Icons.block),
-            onPressed: canTransfer ? () => _executerTransfert("QUARANTAINE") : null,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.orange[900],
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 15),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            label: const Text("QUARANTAINE"),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: ElevatedButton.icon(
-            icon: const Icon(Icons.check_circle),
-            onPressed: canTransfer ? () => _executerTransfert("LIBERER") : null,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green[800],
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 15),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            ),
-            label: const Text("LIBÉRER"),
-          ),
-        ),
+        Expanded(child: _actionBtn("QUARANTAINE", const Color(0xFFF97316), Icons.shield_outlined,
+            canTransfer ? () => _executerTransfert("QUARANTAINE") : null)),
+        const SizedBox(width: 15),
+        Expanded(child: _actionBtn("LIBÉRER", const Color(0xFF10B981), Icons.verified_user_outlined,
+            canTransfer ? () => _executerTransfert("LIBERER") : null)),
       ],
     );
   }
 
+  Widget _actionBtn(String label, Color color, IconData icon, VoidCallback? onTap) {
+    return Material(
+      color: onTap == null ? Colors.grey[200] : color,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 20),
+          child: Column(
+            children: [
+              Icon(icon, color: onTap == null ? Colors.grey[400] : Colors.white),
+              const SizedBox(height: 8),
+              Text(label, style: TextStyle(color: onTap == null ? Colors.grey[500] : Colors.white, fontWeight: FontWeight.w900, fontSize: 11)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildEmptyState() {
-    return Padding(
-      padding: const EdgeInsets.only(top: 80),
+    return Center(
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.qr_code_scanner, size: 100, color: Colors.grey[300]),
-          const SizedBox(height: 16),
-          Text("En attente de scan...", style: TextStyle(color: Colors.grey[400], fontSize: 18)),
+          Container(
+            padding: const EdgeInsets.all(30),
+            decoration: BoxDecoration(color: Colors.white, shape: BoxShape.circle, boxShadow: [BoxShadow(color: primaryDark.withOpacity(0.05), blurRadius: 20)]),
+            child: Icon(Icons.document_scanner_outlined, size: 60, color: accentIndigo.withOpacity(0.2)),
+          ),
+          const SizedBox(height: 25),
+          Text("Système prêt pour analyse", style: TextStyle(color: primaryDark, fontSize: 18, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          Text("Veuillez scanner un lot SAP pour commencer", style: TextStyle(color: Colors.grey[500], fontSize: 13)),
         ],
       ),
     );
+  }
+
+  Widget _buildDrawer() {
+    return Drawer(
+      backgroundColor: Colors.white,
+      child: Column(
+        children: [
+          Container(
+            height: 200,
+            width: double.infinity,
+            color: primaryDark,
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.end,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const CircleAvatar(backgroundColor: Colors.white24, radius: 30, child: Icon(Icons.admin_panel_settings_rounded, color: Colors.white, size: 30)),
+                const SizedBox(height: 15),
+                const Text("Administrateur EMA", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                Text("v1.2.0 stable", style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+         /* _drawerItem(Icons.warehouse_rounded, "Inventaire Global", () {
+            Navigator.pop(context);
+          //  Navigator.push(context, MaterialPageRoute(builder: (_) => const WarehouseLotsScreen(whsCode: "GLOBAL", whsName: "Stock Global")));
+          }),
+
+          */
+          _drawerItem(Icons.settings_suggest_rounded, "Paramètres Système", () {
+            Navigator.pop(context);
+            _showLoginDialog();
+          }),
+          const Spacer(),
+          const Padding(padding: EdgeInsets.all(20), child: Text("LOGISTIC EXPERT MODE", style: TextStyle(letterSpacing: 2, fontSize: 10, fontWeight: FontWeight.w900, color: Colors.grey))),
+        ],
+      ),
+    );
+  }
+
+  Widget _drawerItem(IconData icon, String title, VoidCallback onTap) {
+    return ListTile(
+      leading: Icon(icon, color: primaryDark),
+      title: Text(title, style: TextStyle(fontWeight: FontWeight.w700, color: primaryDark)),
+      onTap: onTap,
+    );
+  }
+
+  void _showStatusSnackBar(String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message, style: const TextStyle(fontWeight: FontWeight.w600)),
+      backgroundColor: isError ? Colors.redAccent : accentIndigo,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+      margin: const EdgeInsets.all(15),
+    ));
   }
 
   void _showLoginDialog() {
@@ -330,33 +404,30 @@ class _HomeScreenState extends State<HomeScreen> {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-        title: const Text("Authentification Admin"),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(25)),
+        title: const Text("Authentification Requis", style: TextStyle(fontWeight: FontWeight.bold)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(controller: u, decoration: const InputDecoration(labelText: "Utilisateur", icon: Icon(Icons.person))),
-            TextField(controller: p, obscureText: true, decoration: const InputDecoration(labelText: "Mot de passe", icon: Icon(Icons.lock))),
+            TextField(controller: u, decoration: const InputDecoration(labelText: "Utilisateur")),
+            const SizedBox(height: 10),
+            TextField(controller: p, obscureText: true, decoration: const InputDecoration(labelText: "Clé d'accès")),
           ],
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text("Annuler")),
           ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: primaryDark, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
             onPressed: () {
               if (u.text.trim() == "admin" && p.text.trim() == "Bp5@maroc") {
                 Navigator.pop(context);
                 Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
-              } else {
-                _showError("Identifiants incorrects");
-              }
+              } else { _showStatusSnackBar("Accès refusé : Identifiants invalides", isError: true); }
             },
-            child: const Text("Valider"),
+            child: const Text("Vérifier", style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
     );
   }
-
-  void _showError(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), backgroundColor: Colors.redAccent, behavior: SnackBarBehavior.floating));
-  void _showSuccess(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m), backgroundColor: Colors.green, behavior: SnackBarBehavior.floating));
 }
