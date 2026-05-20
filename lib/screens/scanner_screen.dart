@@ -25,7 +25,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Scanner un Code-Barre')),
+      appBar: AppBar(
+        title: const Text('Scanner un Code-Barre'),
+        backgroundColor: const Color(0xFF0F172A),
+      ),
       body: MobileScanner(
         controller: controller,
         onDetect: (capture) {
@@ -34,12 +37,10 @@ class _ScannerScreenState extends State<ScannerScreen> {
           final List<Barcode> barcodes = capture.barcodes;
           if (barcodes.isNotEmpty) {
             hasScanned = true;
-            // On récupère la vraie valeur scannée
             final String codeScanne = barcodes.first.rawValue ?? "";
 
             controller.stop().then((_) {
               if (mounted) {
-                // On renvoie la VRAIE valeur à l'écran précédent
                 Navigator.pop(context, codeScanne);
               }
             });

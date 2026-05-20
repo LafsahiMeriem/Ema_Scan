@@ -23,53 +23,111 @@ class _HomeScreenState extends State<HomeScreen> {
   final Color primaryDark = const Color(0xFF0F172A);
   final Color accentIndigo = const Color(0xFF6366F1);
   final Color surfaceLight = const Color(0xFFF8FAFC);
+  final TextEditingController _quantityController = TextEditingController();
 
   Future<void> _executerTransfert(String type) async {
     if (lotDetails == null) return;
-    setState(() => isLoading = true);
+
+    final double qteSaisie = double.tryParse(_quantityController.text) ?? 0;
+    if (qteSaisie <= 0) {
+      _showStatusSnackBar("Veuillez saisir une quantité valide.", isError: true);
+      return;
+    }
+
+    _setLoading(true);
+
     try {
       final prefs = await SharedPreferences.getInstance();
-      String? sourceWhs = prefs.getString('whsSource');
-      String? targetWhs = (type == "QUARANTAINE")
-          ? prefs.getString('whsQuarantaine')
-          : prefs.getString('whsLiberer');
+      String? sourceWhs;
+      String? targetWhs;
+
+      if (type == "QUARANTAINE") {
+        // 🔄 ÉTAPE 1 : On part du magasin source principal vers la quarantaine
+        sourceWhs = prefs.getString('whsSource');           // 'ZPF-BC'
+        targetWhs = prefs.getString('whsQuarantaine');      // 'MANQ MP'
+      } else if (type == "LIBERER") {
+        // 🔄 ÉTAPE 2 : On part du magasin de quarantaine vers le magasin libéré
+        sourceWhs = prefs.getString('whsSourceNonConforme');// 'MANQ MP' (destination du 1er scan)
+        targetWhs = prefs.getString('whsLiberer');          // 'APPOLO'
+      }
 
       if (sourceWhs == null || targetWhs == null) {
-        _showStatusSnackBar("Configuration manquante : Magasins non définis.", isError: true);
-        setState(() => isLoading = false);
+        _showStatusSnackBar("Configuration des magasins incomplète dans les réglages.", isError: true);
+        _setLoading(false);
         return;
       }
+
+      // Sécurité anti-boucle : évite l'erreur SAP 125000017
+      if (sourceWhs.trim().toUpperCase() == targetWhs.trim().toUpperCase()) {
+        _showStatusSnackBar("Erreur : Le magasin de départ ($sourceWhs) et d'arrivée ($targetWhs) sont identiques.", isError: true);
+        _setLoading(false);
+        return;
+      }
+
+      print("🚀 Envoi SAP -> Transfert de $sourceWhs vers $targetWhs (Qté: $qteSaisie)");
 
       String? error = await _sapService.createStockTransfer(
         itemCode: lotDetails!.itemCode,
         batchNumber: lotDetails!.distNumber,
         fromWhs: sourceWhs,
         toWhs: targetWhs,
-        quantity: lotDetails!.totalQuantity,
+        quantity: qteSaisie, // Prend en compte la valeur modifiée à l'écran
       );
 
-      setState(() => isLoading = false);
+      _setLoading(false);
+
       if (error == null) {
-        _showStatusSnackBar("Transfert complété avec succès vers $targetWhs");
-        setState(() { lotDetails = null; _lotController.clear(); });
+        _showStatusSnackBar("✅ Transfert réussi de $sourceWhs vers $targetWhs !");
+        setState(() {
+          lotDetails = null;
+          _lotController.clear();
+          _quantityController.clear();
+        });
       } else {
-        _showStatusSnackBar("Erreur SAP : $error", isError: true);
+        _showStatusSnackBar("❌ Erreur SAP : $error", isError: true);
       }
     } catch (e) {
-      setState(() => isLoading = false);
-      _showStatusSnackBar("Exception système : $e", isError: true);
+      _setLoading(false);
+      _showStatusSnackBar("❌ Erreur système : $e", isError: true);
     }
   }
-
-  void _fetchData() async {
-    if (_lotController.text.isEmpty) return;
-    setState(() => isLoading = true);
-    final data = await _sapService.fetchLotData(_lotController.text);
-    setState(() { lotDetails = data; isLoading = false; });
-    if (data == null) _showStatusSnackBar("Aucun lot correspondant trouvé.", isError: true);
+  void _setLoading(bool value) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => isLoading = value);
+    });
   }
 
   @override
+  void dispose() {
+    _lotController.dispose();
+    _quantityController.dispose(); // Ne pas oublier de le libérer
+    super.dispose();
+  }
+  void _fetchData() async {
+    if (_lotController.text.isEmpty) return;
+
+    // Protection Render de l'affichage de chargement
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => isLoading = true);
+    });
+
+    final data = await _sapService.fetchLotData(_lotController.text);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        setState(() {
+          lotDetails = data;
+          isLoading = false;
+          if (data != null) {
+            _quantityController.text = data.totalQuantity.toString();
+          }
+        });
+        if (data == null) {
+          _showStatusSnackBar("Aucun lot correspondant trouvé avec du stock disponible.", isError: true);
+        }
+      }
+    });
+  }  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: surfaceLight,
@@ -238,7 +296,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildQuantityDisplay() {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
       decoration: BoxDecoration(
         color: primaryDark,
         borderRadius: BorderRadius.circular(20),
@@ -250,17 +308,37 @@ class _HomeScreenState extends State<HomeScreen> {
           const Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text("DISPONIBILITÉ RÉELLE", style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1)),
-              Text("Unités totales", style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500)),
+              Text("QUANTITÉ À TRANSFERER", style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1)),
+              SizedBox(height: 4),
+              Text("Modifier si besoin", style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500)),
             ],
           ),
-          Text("${lotDetails!.totalQuantity}",
-              style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -1)),
+          const SizedBox(width: 20),
+          Expanded(
+            child: TextFormField(
+              controller: _quantityController,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.end,
+              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -1),
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+              ),
+              onChanged: (val) {
+                // Optionnel : Vous pouvez ajouter une vérification pour éviter de
+                // dépasser lotDetails!.totalQuantity si nécessaire
+                final double? saisie = double.tryParse(val);
+                if (saisie != null && saisie > lotDetails!.totalQuantity) {
+                  _quantityController.text = lotDetails!.totalQuantity.toString();
+                  _showStatusSnackBar("La quantité saisie dépasse le stock disponible (${lotDetails!.totalQuantity}).", isError: true);
+                }
+              },
+            ),
+          ),
         ],
       ),
     );
   }
-
   Widget _infoTile(IconData icon, String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),

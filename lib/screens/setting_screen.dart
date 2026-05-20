@@ -17,6 +17,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? whsSource;
   String? whsQuarantaine;
   String? whsLiberer;
+  String? whsSourceNonConforme;
   bool isLoading = false;
 
   final Color primaryDark = const Color(0xFF0F172A);
@@ -37,6 +38,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       whsSource = prefs.getString('whsSource');
       whsQuarantaine = prefs.getString('whsQuarantaine');
       whsLiberer = prefs.getString('whsLiberer');
+      whsSourceNonConforme = prefs.getString('whsSourceNonConforme');
 
       if (savedWhsJson != null) {
         List<dynamic> decoded = jsonDecode(savedWhsJson);
@@ -72,6 +74,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (whsSource != null) await prefs.setString('whsSource', whsSource!);
     if (whsQuarantaine != null) await prefs.setString('whsQuarantaine', whsQuarantaine!);
     if (whsLiberer != null) await prefs.setString('whsLiberer', whsLiberer!);
+    if (whsSourceNonConforme != null) await prefs.setString('whsSourceNonConforme', whsSourceNonConforme!);
 
     if (mounted) {
       _showSnackBar("Configuration enregistrée", accentIndigo);
@@ -188,6 +191,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             icon: Icons.lock_clock_rounded,
             color: Colors.orange[700]!,
             onChanged: (val) => setState(() => whsQuarantaine = val),
+          ),
+          const Divider(height: 1, indent: 60, color: Color(0xFFF1F5F9)),
+
+          _buildDropdownField(
+            label: "Magasin Source Non Conforme",
+            currentValue: whsSourceNonConforme,
+            icon: Icons.not_interested_rounded, // Icône distinctive
+            color: Colors.red[700]!,          // Couleur rouge pour non-conforme
+            onChanged: (val) => setState(() => whsSourceNonConforme = val),
           ),
           const Divider(height: 1, indent: 60, color: Color(0xFFF1F5F9)),
           _buildDropdownField(
