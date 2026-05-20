@@ -168,7 +168,14 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             onPressed: () async {
               final res = await Navigator.push(context, MaterialPageRoute(builder: (_) => const ScannerScreen()));
-              if (res != null) { _lotController.text = res; _fetchData(); }
+              if (res != null) {
+                _lotController.text = res;
+
+                setState(() {
+                  lotDetails = null;
+                });
+
+                _fetchData(); }
             },
           ),
         ),
@@ -197,8 +204,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    _dateBlock("FABRICATION", lotDetails!.mfrDate ?? "--/--/--"),
-                    _dateBlock("EXPIRATION", lotDetails!.expDate ?? "--/--/--"),
+                    _dateBlock("FABRICATION", _formaterDate(lotDetails!.mfrDate)),
+                    _dateBlock("EXPIRATION", _formaterDate(lotDetails!.expDate)),
                   ],
                 ),
                 const SizedBox(height: 25),
@@ -363,7 +370,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           const SizedBox(height: 20),
-         /* _drawerItem(Icons.warehouse_rounded, "Inventaire Global", () {
+          /* _drawerItem(Icons.warehouse_rounded, "Inventaire Global", () {
             Navigator.pop(context);
           //  Navigator.push(context, MaterialPageRoute(builder: (_) => const WarehouseLotsScreen(whsCode: "GLOBAL", whsName: "Stock Global")));
           }),
@@ -429,5 +436,30 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
+
   }
+
+  String _formaterDate(String? dateSap) {
+    if (dateSap == null || dateSap.isEmpty || dateSap == "--/--/--") {
+      return "--/--/--";
+    }
+
+    try {
+      // Si la date reçue est au format AAAA-MM-JJ (ex: 2026-05-20)
+      if (dateSap.contains('-')) {
+        List<String> parts = dateSap.split('-');
+        if (parts.length == 3) {
+          String annee = parts[0];
+          String mois = parts[1];
+          String jour = parts[2];
+          return "$jour-$mois-$annee"; // Devient JJ-MM-AAAA (ex: 20-05-2026)
+        }
+      }
+    } catch (e) {
+      return dateSap; // Sécurité : si ça plante, on affiche la date brute sans crash
+    }
+
+    return dateSap;
+  }
+
 }

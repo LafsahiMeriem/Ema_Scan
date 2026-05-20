@@ -23,10 +23,10 @@ class SapService {
         Uri.parse('$baseUrl/Login'),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
-          "CompanyDB": "test_Web",
+          "CompanyDB": "DB_APP_WEB_HK",
           "UserName": "manager",
           "Password": "20@Y0ur20"
-        }),
+        })
       );
 
       if (response.statusCode == 200) {
