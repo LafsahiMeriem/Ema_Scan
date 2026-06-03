@@ -24,6 +24,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final Color accentIndigo = const Color(0xFF6366F1);
   final Color surfaceLight = const Color(0xFFF8FAFC);
   final TextEditingController _quantityController = TextEditingController();
+  final TextEditingController _cartonController = TextEditingController();
 
   Future<void> _executerTransfert(String type) async {
     if (lotDetails == null) return;
@@ -82,6 +83,7 @@ class _HomeScreenState extends State<HomeScreen> {
           lotDetails = null;
           _lotController.clear();
           _quantityController.clear();
+          _cartonController.clear();
         });
       } else {
         _showStatusSnackBar("❌ Erreur SAP : $error", isError: true);
@@ -101,12 +103,12 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     _lotController.dispose();
     _quantityController.dispose(); // Ne pas oublier de le libérer
+    _cartonController.dispose();
     super.dispose();
   }
   void _fetchData() async {
     if (_lotController.text.isEmpty) return;
 
-    // Protection Render de l'affichage de chargement
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() => isLoading = true);
     });
@@ -120,6 +122,8 @@ class _HomeScreenState extends State<HomeScreen> {
           isLoading = false;
           if (data != null) {
             _quantityController.text = data.totalQuantity.toString();
+            // ✨ On affiche la valeur initiale des cartons reçue de SAP
+            _cartonController.text = data.qteCarton.toString();
           }
         });
         if (data == null) {
@@ -127,7 +131,8 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
     });
-  }  @override
+  }
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: surfaceLight,
@@ -257,8 +262,12 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 _infoTile(Icons.api_rounded, "REFERENCE ARTICLE", lotDetails!.itemCode),
                 _infoTile(Icons.layers_rounded, "IDENTIFIANT LOT", lotDetails!.distNumber),
-                _infoTile(Icons.inventory_2_outlined, "CONDITIONNEMENT", "${lotDetails!.qteCarton} Cartons"),
-                const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Divider(color: Color(0xFFF1F5F9))),
+
+                const SizedBox(height: 15),
+                // ✨ ÉTAPE MULTI-SCAN : Zone de modification du conditionnement (Cartons)
+                _buildCartonInputField(),
+
+                const Padding(padding: EdgeInsets.symmetric(vertical: 15), child: Divider(color: Color(0xFFF1F5F9))),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -267,7 +276,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
                 const SizedBox(height: 25),
-                _buildQuantityDisplay(),
+                _buildQuantityDisplay(), // Affichera la quantité automatiquement calculée
               ],
             ),
           ),
@@ -276,6 +285,68 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+// ✨ Nouveau Widget : Saisie du nombre de cartons avec calcul auto de la quantité
+  Widget _buildCartonInputField() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      decoration: BoxDecoration(
+        color: surfaceLight,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: accentIndigo.withOpacity(0.2), width: 1.5),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text("CONDITIONNEMENT (CARTONS)", style: TextStyle(color: accentIndigo, fontSize: 10, fontWeight: FontWeight.w900, letterSpacing: 1)),
+              const SizedBox(height: 4),
+              Text("Modifier le nombre", style: TextStyle(color: primaryDark.withOpacity(0.6), fontSize: 13, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          const SizedBox(width: 20),
+          Expanded(
+            child: TextFormField(
+              controller: _cartonController,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.end,
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: primaryDark),
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                hintText: "0",
+                contentPadding: EdgeInsets.zero,
+              ),
+              onChanged: (val) {
+                if (lotDetails == null) return;
+
+                final double? nouveauxCartons = double.tryParse(val);
+                if (nouveauxCartons != null && nouveauxCartons >= 0) {
+                  // 🧮 RÈGLE : Calcul de la taille unitaire d'un carton (Ex: 7200 kg / 40 cartons = 180 kg par carton)
+                  // Si la valeur initiale de qteCarton est à 0, on sécurise pour éviter la division par zéro.
+                  double ratioInitial = (lotDetails!.qteCarton > 0) ? lotDetails!.qteCarton : 1.0;
+                  double tailleUnitaireCarton = lotDetails!.totalQuantity / ratioInitial;
+
+                  // Calcul de la nouvelle quantité théorique
+                  double nouvelleQuantite = nouveauxCartons * tailleUnitaireCarton;
+
+                  // Optionnel : Limitation au stock disponible SAP maximum pour éviter les erreurs de flux
+                  if (nouvelleQuantite > lotDetails!.totalQuantity) {
+                    _showStatusSnackBar("Avertissement : Quantité supérieure au stock initial.", isError: false);
+                  }
+
+                  setState(() {
+                    // Met à jour dynamiquement le champ de quantité à l'écran
+                    _quantityController.text = nouvelleQuantite.toStringAsFixed(2);
+                  });
+                }
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
   Widget _buildCardHeader() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
@@ -308,31 +379,23 @@ class _HomeScreenState extends State<HomeScreen> {
           const Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text("QUANTITÉ À TRANSFERER", style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1)),
+              Text("QUANTITÉ CALCULÉE (KG/UT)", style: TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 1)),
               SizedBox(height: 4),
-              Text("Modifier si besoin", style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500)),
+              Text("Mise à jour auto", style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500)),
             ],
           ),
           const SizedBox(width: 20),
           Expanded(
             child: TextFormField(
               controller: _quantityController,
-              keyboardType: TextInputType.number,
+              enabled: false, // 🔒 Verrouillé car calculé automatiquement par le nombre de cartons
               textAlign: TextAlign.end,
               style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -1),
               decoration: const InputDecoration(
                 border: InputBorder.none,
                 contentPadding: EdgeInsets.zero,
+                disabledBorder: InputBorder.none, // Supprime la ligne de désactivation
               ),
-              onChanged: (val) {
-                // Optionnel : Vous pouvez ajouter une vérification pour éviter de
-                // dépasser lotDetails!.totalQuantity si nécessaire
-                final double? saisie = double.tryParse(val);
-                if (saisie != null && saisie > lotDetails!.totalQuantity) {
-                  _quantityController.text = lotDetails!.totalQuantity.toString();
-                  _showStatusSnackBar("La quantité saisie dépasse le stock disponible (${lotDetails!.totalQuantity}).", isError: true);
-                }
-              },
             ),
           ),
         ],
@@ -523,18 +586,18 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     try {
-      // Si la date reçue est au format AAAA-MM-JJ (ex: 2026-05-20)
+
       if (dateSap.contains('-')) {
         List<String> parts = dateSap.split('-');
         if (parts.length == 3) {
           String annee = parts[0];
           String mois = parts[1];
           String jour = parts[2];
-          return "$jour-$mois-$annee"; // Devient JJ-MM-AAAA (ex: 20-05-2026)
+          return "$jour-$mois-$annee";
         }
       }
     } catch (e) {
-      return dateSap; // Sécurité : si ça plante, on affiche la date brute sans crash
+      return dateSap;
     }
 
     return dateSap;

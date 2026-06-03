@@ -42,7 +42,6 @@ class LotInfo {
       qteCarton: (json['U_U_QteCarton'] ?? 0).toDouble(),
       numInCnt: extractedNumInCnt,
 
-      // Correction Dates : Si ManufacturingDate est null, on prend AdmissionDate
       mfrDate: (json['ManufacturingDate'] != null)
           ? json['ManufacturingDate'].toString().split('T')[0]
           : (json['AdmissionDate'] != null ? json['AdmissionDate'].toString().split('T')[0] : "-"),
