@@ -26,6 +26,33 @@ class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _quantityController = TextEditingController();
   final TextEditingController _cartonController = TextEditingController();
 
+  // Variables pour la gestion dynamique des magasins SAP
+  String? _selectedWarehouse;
+  List<Map<String, String>> _magasinsList = [];
+  bool _isLoadingWarehouses = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSapWarehouses(); // Chargement des magasins dès l'ouverture
+  }
+
+  Future<void> _loadSapWarehouses() async {
+    setState(() => _isLoadingWarehouses = true);
+    try {
+      final whs = await _sapService.fetchAllWarehouses();
+      if (mounted) {
+        setState(() {
+          _magasinsList = whs;
+          _isLoadingWarehouses = false;
+        });
+      }
+    } catch (e) {
+      print("❌ Erreur chargement magasins : $e");
+      if (mounted) setState(() => _isLoadingWarehouses = false);
+    }
+  }
+
   Future<void> _executerTransfert(String type) async {
     if (lotDetails == null) return;
 
@@ -43,22 +70,24 @@ class _HomeScreenState extends State<HomeScreen> {
       String? targetWhs;
 
       if (type == "QUARANTAINE") {
-        // 🔄 ÉTAPE 1 : On part du magasin source principal vers la quarantaine
-        sourceWhs = prefs.getString('whsSource');           // 'ZPF-BC'
-        targetWhs = prefs.getString('whsQuarantaine');      // 'MANQ MP'
+        sourceWhs = prefs.getString('whsSource');
+        targetWhs = prefs.getString('whsQuarantaine');
       } else if (type == "LIBERER") {
-        // 🔄 ÉTAPE 2 : On part du magasin de quarantaine vers le magasin libéré
-        sourceWhs = prefs.getString('whsSourceNonConforme');// 'MANQ MP' (destination du 1er scan)
-        targetWhs = prefs.getString('whsLiberer');          // 'APPOLO'
+        sourceWhs = prefs.getString('whsSourceNonConforme');
+        targetWhs = prefs.getString('whsLiberer');
+      }
+
+      // Si l'utilisateur a sélectionné un magasin dans le ComboBox, il devient prioritaire
+      if (_selectedWarehouse != null) {
+        targetWhs = _selectedWarehouse;
       }
 
       if (sourceWhs == null || targetWhs == null) {
-        _showStatusSnackBar("Configuration des magasins incomplète dans les réglages.", isError: true);
+        _showStatusSnackBar("Configuration des magasins incomplète.", isError: true);
         _setLoading(false);
         return;
       }
 
-      // Sécurité anti-boucle : évite l'erreur SAP 125000017
       if (sourceWhs.trim().toUpperCase() == targetWhs.trim().toUpperCase()) {
         _showStatusSnackBar("Erreur : Le magasin de départ ($sourceWhs) et d'arrivée ($targetWhs) sont identiques.", isError: true);
         _setLoading(false);
@@ -72,7 +101,7 @@ class _HomeScreenState extends State<HomeScreen> {
         batchNumber: lotDetails!.distNumber,
         fromWhs: sourceWhs,
         toWhs: targetWhs,
-        quantity: qteSaisie, // Prend en compte la valeur modifiée à l'écran
+        quantity: qteSaisie,
       );
 
       _setLoading(false);
@@ -81,6 +110,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _showStatusSnackBar("✅ Transfert réussi de $sourceWhs vers $targetWhs !");
         setState(() {
           lotDetails = null;
+          _selectedWarehouse = null; // Réinitialisation après succès
           _lotController.clear();
           _quantityController.clear();
           _cartonController.clear();
@@ -93,6 +123,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _showStatusSnackBar("❌ Erreur système : $e", isError: true);
     }
   }
+
   void _setLoading(bool value) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() => isLoading = value);
@@ -102,10 +133,11 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _lotController.dispose();
-    _quantityController.dispose(); // Ne pas oublier de le libérer
+    _quantityController.dispose();
     _cartonController.dispose();
     super.dispose();
   }
+
   void _fetchData() async {
     if (_lotController.text.isEmpty) return;
 
@@ -122,7 +154,6 @@ class _HomeScreenState extends State<HomeScreen> {
           isLoading = false;
           if (data != null) {
             _quantityController.text = data.totalQuantity.toString();
-            // ✨ On affiche la valeur initiale des cartons reçue de SAP
             _cartonController.text = data.qteCarton.toString();
           }
         });
@@ -132,6 +163,7 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     });
   }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -160,24 +192,89 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // ✨ Modification ici : Le ComboBox s'affiche maintenant TOUJOURS en haut de la zone de contenu
   Widget _buildContent() {
     if (isLoading) {
       return Center(child: CircularProgressIndicator(color: accentIndigo, strokeWidth: 2));
     }
-    if (lotDetails != null) {
-      return SingleChildScrollView(
-        physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 25),
-        child: Column(
-          children: [
+
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 25),
+      child: Column(
+        children: [
+          // 1. Le menu déroulant s'affiche en premier, avant le scan du lot
+          _buildWarehouseDropdown(),
+
+          const SizedBox(height: 25),
+
+          // 2. Affichage conditionnel selon si un lot est chargé ou non
+          if (lotDetails != null) ...[
             _buildMainInfoCard(),
             const SizedBox(height: 30),
             _buildActionButtons(),
+          ] else ...[
+            // Si aucun lot n'est encore scanné, on affiche la zone d'attente (Empty State)
+            _buildEmptyState(),
           ],
+        ],
+      ),
+    );
+  }
+
+  // ✨ Ajustement visuel : Le fond passe en blanc pur avec une ombre pour bien se détacher du fond gris clair
+  Widget _buildWarehouseDropdown() {
+    if (_isLoadingWarehouses) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(10.0),
+          child: SizedBox(
+            height: 24,
+            width: 24,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF6366F1)),
+          ),
         ),
       );
     }
-    return _buildEmptyState();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+              color: primaryDark.withOpacity(0.04),
+              blurRadius: 20,
+              offset: const Offset(0, 8)
+          )
+        ],
+        border: Border.all(color: accentIndigo.withOpacity(0.15), width: 1.2),
+      ),
+      child: DropdownButtonFormField<String>(
+        value: _selectedWarehouse,
+        hint: Text(
+          "Sélectionner le magasin de destination",
+          style: TextStyle(color: primaryDark.withOpacity(0.5), fontSize: 13, fontWeight: FontWeight.w500),
+        ),
+        icon: Icon(Icons.arrow_drop_down_rounded, color: accentIndigo, size: 30),
+        decoration: const InputDecoration(border: InputBorder.none),
+        dropdownColor: Colors.white,
+        isExpanded: true,
+        style: TextStyle(color: primaryDark, fontWeight: FontWeight.bold, fontSize: 13),
+        items: _magasinsList.map((whs) {
+          return DropdownMenuItem<String>(
+            value: whs['code'],
+            child: Text("[${whs['code']}] ${whs['name']}"),
+          );
+        }).toList(),
+        onChanged: (value) {
+          setState(() {
+            _selectedWarehouse = value;
+          });
+        },
+      ),
+    );
   }
 
   Widget _buildPremiumHeader() {
@@ -233,12 +330,11 @@ class _HomeScreenState extends State<HomeScreen> {
               final res = await Navigator.push(context, MaterialPageRoute(builder: (_) => const ScannerScreen()));
               if (res != null) {
                 _lotController.text = res;
-
                 setState(() {
                   lotDetails = null;
                 });
-
-                _fetchData(); }
+                _fetchData();
+              }
             },
           ),
         ),
@@ -262,11 +358,8 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 _infoTile(Icons.api_rounded, "REFERENCE ARTICLE", lotDetails!.itemCode),
                 _infoTile(Icons.layers_rounded, "IDENTIFIANT LOT", lotDetails!.distNumber),
-
                 const SizedBox(height: 15),
-                // ✨ ÉTAPE MULTI-SCAN : Zone de modification du conditionnement (Cartons)
                 _buildCartonInputField(),
-
                 const Padding(padding: EdgeInsets.symmetric(vertical: 15), child: Divider(color: Color(0xFFF1F5F9))),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -276,7 +369,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
                 const SizedBox(height: 25),
-                _buildQuantityDisplay(), // Affichera la quantité automatiquement calculée
+                _buildQuantityDisplay(),
               ],
             ),
           ),
@@ -285,7 +378,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-// ✨ Nouveau Widget : Saisie du nombre de cartons avec calcul auto de la quantité
   Widget _buildCartonInputField() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -312,31 +404,19 @@ class _HomeScreenState extends State<HomeScreen> {
               keyboardType: TextInputType.number,
               textAlign: TextAlign.end,
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: primaryDark),
-              decoration: const InputDecoration(
-                border: InputBorder.none,
-                hintText: "0",
-                contentPadding: EdgeInsets.zero,
-              ),
+              decoration: const InputDecoration(border: InputBorder.none, hintText: "0", contentPadding: EdgeInsets.zero),
               onChanged: (val) {
                 if (lotDetails == null) return;
-
                 final double? nouveauxCartons = double.tryParse(val);
                 if (nouveauxCartons != null && nouveauxCartons >= 0) {
-                  // 🧮 RÈGLE : Calcul de la taille unitaire d'un carton (Ex: 7200 kg / 40 cartons = 180 kg par carton)
-                  // Si la valeur initiale de qteCarton est à 0, on sécurise pour éviter la division par zéro.
                   double ratioInitial = (lotDetails!.qteCarton > 0) ? lotDetails!.qteCarton : 1.0;
                   double tailleUnitaireCarton = lotDetails!.totalQuantity / ratioInitial;
-
-                  // Calcul de la nouvelle quantité théorique
                   double nouvelleQuantite = nouveauxCartons * tailleUnitaireCarton;
 
-                  // Optionnel : Limitation au stock disponible SAP maximum pour éviter les erreurs de flux
                   if (nouvelleQuantite > lotDetails!.totalQuantity) {
                     _showStatusSnackBar("Avertissement : Quantité supérieure au stock initial.", isError: false);
                   }
-
                   setState(() {
-                    // Met à jour dynamiquement le champ de quantité à l'écran
                     _quantityController.text = nouvelleQuantite.toStringAsFixed(2);
                   });
                 }
@@ -347,6 +427,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+
   Widget _buildCardHeader() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
@@ -388,20 +469,17 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(
             child: TextFormField(
               controller: _quantityController,
-              enabled: false, // 🔒 Verrouillé car calculé automatiquement par le nombre de cartons
+              enabled: false,
               textAlign: TextAlign.end,
               style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: -1),
-              decoration: const InputDecoration(
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.zero,
-                disabledBorder: InputBorder.none, // Supprime la ligne de désactivation
-              ),
+              decoration: const InputDecoration(border: InputBorder.none, contentPadding: EdgeInsets.zero, disabledBorder: InputBorder.none),
             ),
           ),
         ],
       ),
     );
   }
+
   Widget _infoTile(IconData icon, String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10),
@@ -475,6 +553,7 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
+          const SizedBox(height: 30),
           Container(
             padding: const EdgeInsets.all(30),
             decoration: BoxDecoration(color: Colors.white, shape: BoxShape.circle, boxShadow: [BoxShadow(color: primaryDark.withOpacity(0.05), blurRadius: 20)]),
@@ -511,12 +590,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           const SizedBox(height: 20),
-          /* _drawerItem(Icons.warehouse_rounded, "Inventaire Global", () {
-            Navigator.pop(context);
-          //  Navigator.push(context, MaterialPageRoute(builder: (_) => const WarehouseLotsScreen(whsCode: "GLOBAL", whsName: "Stock Global")));
-          }),
-
-          */
           _drawerItem(Icons.settings_suggest_rounded, "Paramètres Système", () {
             Navigator.pop(context);
             _showLoginDialog();
@@ -577,16 +650,13 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
-
   }
 
   String _formaterDate(String? dateSap) {
     if (dateSap == null || dateSap.isEmpty || dateSap == "--/--/--") {
       return "--/--/--";
     }
-
     try {
-
       if (dateSap.contains('-')) {
         List<String> parts = dateSap.split('-');
         if (parts.length == 3) {
@@ -599,8 +669,6 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       return dateSap;
     }
-
     return dateSap;
   }
-
 }

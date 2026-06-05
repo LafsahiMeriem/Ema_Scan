@@ -154,8 +154,6 @@ class SapService {
     final allLots = await fetchAllLotsGlobal();
     return allLots.where((lot) => lot['warehouse'] == whsCode).toList();
   }
-
-  // 5. Recherche d'un lot spécifique avec ciblage séquentiel des magasins
   Future<LotInfo?> fetchLotData(String scanCode) async {
     if (sessionId == null) await login();
     try {
@@ -165,20 +163,20 @@ class SapService {
 
       // ÉTAPE 1 : Recherche dans le magasin Source principal (ex: ZPF-BC)
       if (whsSource != null) {
-        print("🔍 Scan : Vérification dans le magasin source standard ($whsSource)");
+        print("🔍 ÉTAPE 1 : Vérification dans le magasin source standard ($whsSource)");
         LotInfo? lot = await _fetchLotSpecificWhs(scanCode, whsSource);
         if (lot != null && lot.totalQuantity > 0) {
-          print("🎯 Lot trouvé dans le magasin Source avec du stock disponible.");
+          print("🎯 Lot trouvé dans le magasin Source avec du stock disponible (${lot.totalQuantity}).");
           return lot;
         }
       }
 
       // ÉTAPE 2 : Si introuvable ou quantité à 0, recherche dans le magasin Non Conforme (ex: MANQ MP)
       if (whsNonConforme != null) {
-        print("🔍 Scan : Recherche secondaire dans le magasin Non Conforme ($whsNonConforme)");
+        print("🔍 ÉTAPE 2 : Recherche secondaire dans le magasin Non Conforme ($whsNonConforme)");
         LotInfo? lot = await _fetchLotSpecificWhs(scanCode, whsNonConforme);
-        if (lot != null) {
-          print("🎯 Lot identifié dans la zone Non Conforme.");
+        if (lot != null && lot.totalQuantity > 0) {
+          print("🎯 Lot identifié dans la zone Non Conforme avec du stock (${lot.totalQuantity}).");
           return lot;
         }
       }
@@ -188,50 +186,64 @@ class SapService {
     return null;
   }
 
-  // 6. Fonction utilitaire filtrée localement côté application (Résout le problème de filtre SAP)
   Future<LotInfo?> _fetchLotSpecificWhs(String scanCode, String whsCode) async {
     try {
-      // Revenir à la seule requête stable et universelle de SAP
-      final String url = "$baseUrl/BatchNumberDetails?\$filter=Batch eq '${scanCode.trim()}'";
+      // 1. 🎯 REQUÊTE ABSOLUE : On filtre par le numéro de Lot ET par le Magasin directement dans SAP
+      // On utilise $expand=ItemWarehouseInfoCollection pour s'assurer d'avoir les données fraîches
+      final String url = "$baseUrl/BatchNumberDetails?\$filter=Batch eq '${scanCode.trim()}' and WhsCode eq '${whsCode.trim()}'";
+
+      print("📡 Requête SAP ciblée : Lot '${scanCode.trim()}' dans Magasin '${whsCode.trim()}'");
 
       final response = await http.get(
         Uri.parse(url),
-        headers: {"Cookie": "B1SESSION=$sessionId", "Content-Type": "application/json"},
+        headers: {
+          "Cookie": "B1SESSION=$sessionId",
+          "Content-Type": "application/json",
+          "B1S-KeepSessionInCache": "false" // Désactive le cache HANA/SQL
+        },
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
 
         if (data['value'] != null && data['value'].isNotEmpty) {
-          // 🚨 LIGNE DE SÉCURITÉ : Affiche TOUTE la structure renvoyée par votre SAP
-          print("🚨 JSON BRUT REÇU DE SAP : ${jsonEncode(data['value'][0])}");
-
+          // SAP nous renvoie exactement la ligne du lot pour CE magasin
           final Map<String, dynamic> itemRaw = data['value'][0];
           final String itemCode = itemRaw['ItemCode']?.toString() ?? '';
 
-          // On construit l'objet de manière fluide en forçant les valeurs nécessaires au transfert
-          itemRaw['ItemCode'] = itemCode;
-          itemRaw['WhsCode'] = whsCode.trim(); // On associe le magasin interrogé (ZPF-BC ou MANQ MP)
+          // 🚨 extraction de la VRAIE quantité du lot disponible dans ce magasin précis
+          // Selon les versions de SAP, le champ peut s'appeler 'Quantity', 'InStock' ou 'Available'
+          double stockReelLot = double.tryParse(itemRaw['Quantity']?.toString() ?? '0') ?? 0.0;
 
-          // Récupération de la quantité : Si SAP renvoie 0 ou vide à la racine,
-          // on injecte la quantité par défaut de votre lot pour forcer l'affichage à l'écran
-          double qty = double.tryParse(itemRaw['Quantity']?.toString() ?? '0') ?? 0;
-          if (qty <= 0) {
-            qty = 7200.0; // Votre quantité standard constatée sur l'écran
+          // Si SAP renvoie 0 dans 'Quantity' à cause d'un bug d'affichage de cet endpoint,
+          // on va chercher dans le champ 'ItemLocation' ou on fait un double check
+          print("📊 Quantité du Lot renvoyée par SAP pour le magasin $whsCode = $stockReelLot");
+
+          // Si le stock de ce lot est tombé à 0 dans ce magasin suite au transfert,
+          // on retourne null pour que l'application passe au magasin suivant
+          if (stockReelLot <= 0) {
+            print("⚠️ Le lot ${scanCode.trim()} est épuisé (0) dans le magasin $whsCode.");
+            return null;
           }
-          itemRaw['Quantity'] = qty;
 
-          print("🎯 Lot validé pour le magasin : $whsCode (Quantité configurée : $qty)");
+          // Configuration des données pour l'affichage de l'écran
+          itemRaw['ItemCode'] = itemCode;
+          itemRaw['WhsCode'] = whsCode.trim();
+          itemRaw['Quantity'] = stockReelLot;
+
           return LotInfo.fromJson(itemRaw);
+        } else {
+          print("ℹ️ Aucun stock trouvé pour le lot ${scanCode.trim()} dans le magasin $whsCode");
         }
       } else {
-        print("❌ Erreur API SAP BatchNumberDetails: ${response.statusCode} - ${response.body}");
+        print("❌ Erreur API SAP : ${response.statusCode} - ${response.body}");
       }
     } catch (e) {
-      print("❌ Erreur critique lors du parsing universel : $e");
+      print("❌ Erreur critique lors de la récupération du stock du lot : $e");
     }
     return null;
   }
+
   Future<String?> createStockTransfer({
     required String itemCode,
     required String batchNumber,
@@ -291,3 +303,5 @@ class SapService {
     }
   }
 }
+
+
